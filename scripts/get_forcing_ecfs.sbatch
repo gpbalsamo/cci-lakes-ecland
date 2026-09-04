@@ -23,7 +23,13 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+# NOTE: cannot resolve sibling scripts from ${BASH_SOURCE[0]} here -- SLURM
+# copies the submitted script to /var/spool/slurmd/job<id>/ and runs it from
+# there, so BASH_SOURCE points at the spool copy, not this repo checkout (this
+# is why the first submission of this job, 32771319, failed in 8 seconds with
+# "get_forcing_ecfs.sh: No such file or directory"). Resolve the repo root
+# from $PERM instead, like the sibling repos' own scripts do.
+REPO_DIR="${REPO_DIR:-${PERM:?PERM not set in the batch environment}/cci-lakes-ecland}"
 
 : "${START_DATE:?set via --export=START_DATE=YYYYMMDD}"
 : "${END_DATE:?set via --export=END_DATE=YYYYMMDD}"
@@ -32,4 +38,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 DEST_DIR="${DEST_DIR:-${SCRATCH}/cci-lakes-ecland/forcing/raw}"
 CONCURRENCY="${CONCURRENCY:-4}"
 
-"${SCRIPT_DIR}/get_forcing_ecfs.sh" "${START_DATE}" "${END_DATE}" "${DEST_DIR}" "${CONCURRENCY}"
+"${REPO_DIR}/scripts/get_forcing_ecfs.sh" "${START_DATE}" "${END_DATE}" "${DEST_DIR}" "${CONCURRENCY}"
