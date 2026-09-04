@@ -31,13 +31,24 @@
 # file without --force.
 #
 # Usage:
-#   stage_portal_job.sh JOB_ID [--link] [--force] [--root JOBS_ROOT]
+#   stage_portal_job.sh JOB_ID [--link] [--force] [--root JOBS_ROOT] [--years Y1-Y2]
 #
 #     JOB_ID    e.g. 20260904T111326_Ld-001
 #     --link    symlink instead of copy (saves space; breaks if the job
 #                directory is later moved or cleaned up)
 #     --force   overwrite files that already exist at the destination
 #     --root    JOBS_ROOT, default $ECLAND_PORTAL_JOBS_ROOT or $PERM/ecland_portal_jobs
+#     --years   relabel every staged filename's trailing _<Y1>-<Y2> to this.
+#                create_forcing names files by the literal year digits of
+#                --iniDate/--endDate (create_sites.bash: iniYear=${iniDate:0:4}),
+#                not by what period the run is actually meant to represent. A
+#                physiography-only job run once with a placeholder end_date
+#                (surfclim/surfinit do not depend on end_date at all -- only
+#                start_date, lat/lon and which_surface) will carry whatever
+#                year that placeholder was, e.g. surfclim_Ld-001_2017-2026.nc
+#                for a benchmark period that was later fixed at 2017-2022. Pass
+#                --years 2017-2022 to land it as surfclim_Ld-001_2017-2022.nc
+#                instead of re-extracting identical content under a new job.
 #
 # (C) Copyright 2026- ECMWF. Apache Licence Version 2.0.
 
@@ -56,12 +67,14 @@ LINK=false
 FORCE=false
 JOBS_ROOT="${ECLAND_PORTAL_JOBS_ROOT:-${PERM:-/perm/${USER:-pad}}/ecland_portal_jobs}"
 JOB_ID=""
+YEARS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --link) LINK=true; shift ;;
     --force) FORCE=true; shift ;;
     --root) JOBS_ROOT="$2"; shift 2 ;;
+    --years) YEARS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       if [[ -z "${JOB_ID}" ]]; then JOB_ID="$1"; shift
@@ -74,6 +87,23 @@ if [[ -z "${JOB_ID}" ]]; then
   usage >&2
   exit 2
 fi
+
+if [[ -n "${YEARS}" && ! "${YEARS}" =~ ^[0-9]{4}-[0-9]{4}$ ]]; then
+  echo "ERROR: --years must look like 2017-2022" >&2
+  exit 2
+fi
+
+# Rewrite a filename's trailing _<Y1>-<Y2> to --years, if given; identity
+# otherwise. Applied to every destination name below, so clim/forcing/
+# namelist/output/landgram all end up relabelled consistently.
+relabel() {
+  local name="$1"
+  if [[ -n "${YEARS}" ]]; then
+    sed -E "s/_[0-9]{4}-[0-9]{4}/_${YEARS}/" <<<"${name}"
+  else
+    echo "${name}"
+  fi
+}
 
 JOB_DIR="${JOBS_ROOT}/${JOB_ID}"
 if [[ ! -d "${JOB_DIR}" ]]; then
@@ -105,7 +135,7 @@ echo
 echo "-- clim --"
 CLIM_COUNT=0
 while IFS= read -r -d '' f; do
-  place "${f}" "${REPO_ROOT}/clim/${GROUP}/$(basename "${f}")"
+  place "${f}" "${REPO_ROOT}/clim/${GROUP}/$(relabel "$(basename "${f}")")"
   CLIM_COUNT=$((CLIM_COUNT + 1))
 done < <(find "${JOB_DIR}/clim" -maxdepth 2 \( -name "surfclim_*.nc" -o -name "surfinit_*.nc" \) -print0 2>/dev/null)
 [[ "${CLIM_COUNT}" -eq 0 ]] && echo "  none yet (physiography step not finished?)"
@@ -114,7 +144,7 @@ echo
 echo "-- forcing --"
 FORCING_COUNT=0
 while IFS= read -r -d '' f; do
-  place "${f}" "${REPO_ROOT}/forcing/${GROUP}/$(basename "${f}")"
+  place "${f}" "${REPO_ROOT}/forcing/${GROUP}/$(relabel "$(basename "${f}")")"
   FORCING_COUNT=$((FORCING_COUNT + 1))
 done < <(find "${JOB_DIR}/forcing" -maxdepth 2 -name "met_*.nc" -print0 2>/dev/null)
 [[ "${FORCING_COUNT}" -eq 0 ]] && echo "  none yet (forcing step not finished?)"
@@ -130,6 +160,7 @@ else
   for nl in "${NAMELISTS[@]}"; do
     [[ -f "${nl}" ]] || continue
     STA="$(basename "${nl}")"; STA="${STA#namelist_}"
+    STA="$(relabel "${STA}")"
     place "${nl}" "${REPO_ROOT}/output/${STA}__portal_${JOB_ID}/namelist_${STA}"
   done
 fi
@@ -139,7 +170,7 @@ echo "-- model output (if the portal already ran ecLand) --"
 if [[ -d "${JOB_DIR}/output" ]] && find "${JOB_DIR}/output" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
   for sta_dir in "${JOB_DIR}/output"/*/; do
     [[ -d "${sta_dir}" ]] || continue
-    STA="$(basename "${sta_dir}")"
+    STA="$(relabel "$(basename "${sta_dir}")")"
     DEST="${REPO_ROOT}/output/${STA}__portal_${JOB_ID}"
     while IFS= read -r -d '' f; do
       place "${f}" "${DEST}/$(basename "${f}")"
@@ -159,7 +190,8 @@ if [[ ${#LANDGRAMS[@]} -eq 0 ]]; then
 else
   for png in "${LANDGRAMS[@]}"; do
     STA="$(basename "${png}" .png)"; STA="${STA#landgram_}"
-    place "${png}" "${REPO_ROOT}/output/${STA}__portal_${JOB_ID}/$(basename "${png}")"
+    STA="$(relabel "${STA}")"
+    place "${png}" "${REPO_ROOT}/output/${STA}__portal_${JOB_ID}/landgram_${STA}.png"
   done
 fi
 
