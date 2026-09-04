@@ -34,6 +34,12 @@ create_forcing() looks up the output variable name from the GRIB shortName,
 this gets it reset to 'tp' before writing -- otherwise it would silently
 collide with Ctpf, which legitimately carries shortName 'cp'.
 
+The day loop is OUTER and the variable loop INNER, which is not incidental: one
+daily tarball is 2.1 GB of gzip whose member index sits at the end, so opening it
+costs a full decompression. Taking one variable per open meant gunzipping each
+day ten times over -- ~50 s per variable-day measured, against 25-32 s to
+decompress once and take all ten members in a single streaming pass.
+
 GRIB messages concatenate at the byte level (each is self-delimited), so
 per-day, per-variable fieldsets are cropped and (except the last day)
 message-trimmed with metview, written to small GRIB files, and joined with
@@ -88,15 +94,49 @@ def daterange(start: date, end: date):
         d += timedelta(days=1)
 
 
-def extract_member(tar_path: str, var: str, dest_dir: str) -> str:
-    with tarfile.open(tar_path, "r:gz") as tf:
-        member = next(
-            (m for m in tf.getmembers() if m.name.endswith(f"{var}.grb")), None
+def extract_day_members(tar_path: str, wanted: list, dest_dir: str) -> dict:
+    """Extract several variables from one daily tarball in a SINGLE gzip pass.
+
+    Returns {var: path}.
+
+    This is the whole reason the day loop is outer (see build_forcing_gribs).
+    Opening a 2.1 GB .tar.gz costs a full decompression of the stream -- the
+    member index lives at the end -- so pulling one member per open meant
+    gunzipping the same file ten times, once per variable. Measured: ~50 s per
+    variable-day, i.e. ~8 min per day of forcing, against 25-32 s to decompress
+    once and take all ten. Over Ladoga's 2017-2022 benchmark (2192 days) that is
+    the difference between ~290 h and ~36 h.
+
+    Iterating `for member in tf` rather than calling tf.getmembers() and then
+    tf.extract() per member matters for the same reason: extract() may seek
+    backwards, and on a compressed stream a backward seek restarts the
+    decompression from the beginning. Streaming forward visits each member once.
+    """
+    remaining = {f"{var}.grb": var for var in wanted}
+    found = {}
+    with tarfile.open(tar_path, "r|gz") as tf:
+        for member in tf:
+            if not remaining:
+                break
+            key = os.path.basename(member.name)
+            var = remaining.pop(key, None)
+            if var is None:
+                continue
+            # extractfile() on a stream returns a reader positioned at this
+            # member, valid only until the iterator advances -- so copy it out now.
+            src = tf.extractfile(member)
+            if src is None:
+                raise OSError(f"{member.name} in {tar_path} is not a regular file")
+            out_path = os.path.join(dest_dir, key)
+            with open(out_path, "wb") as out:
+                shutil.copyfileobj(src, out)
+            found[var] = out_path
+    if remaining:
+        raise FileNotFoundError(
+            f"{tar_path} has no {', '.join(sorted(remaining))} "
+            f"(found: {', '.join(sorted(found)) or 'nothing wanted'})"
         )
-        if member is None:
-            raise FileNotFoundError(f"{var}.grb not found inside {tar_path}")
-        tf.extract(member, path=dest_dir)
-        return os.path.join(dest_dir, member.name)
+    return found
 
 
 def read_and_crop_with_retry(raw_member: str, area, attempts: int = 4, delay_s: float = 10.0):
@@ -118,39 +158,70 @@ def read_and_crop_with_retry(raw_member: str, area, attempts: int = 4, delay_s: 
     raise last_exc
 
 
-def build_variable_grib(var: str, days: list, raw_dir: str, work_dir: str, area) -> str:
-    """Crop + day-boundary-trim + concatenate one variable across the whole
-    date range into a single GRIB file. Returns its path.
+def day_crop_path(work_dir: str, var: str, dstr: str) -> str:
+    return os.path.join(work_dir, f"{var}_{dstr}.crop.grb")
 
-    Resumable: a day whose cropped GRIB already exists in work_dir is reused
-    rather than re-extracted, so a run interrupted partway through (or hitting
-    the transient metview error above beyond its retry budget) can continue
-    from where it left off by rerunning with the same --work-dir."""
-    day_gribs = []
+
+def build_forcing_gribs(varlist: list, days: list, raw_dir: str, work_dir: str, area) -> dict:
+    """Crop every variable for every day, then concatenate per variable.
+
+    Returns {var: combined_grib_path}.
+
+    DAY LOOP OUTER, VARIABLE LOOP INNER. Each daily tarball is decompressed
+    exactly once and all ten variables are taken from that one pass -- see
+    extract_day_members for the measurement that motivates it.
+
+    Resumable, as before: a day whose cropped GRIB already exists in work_dir is
+    reused rather than re-extracted, so a run interrupted partway through (or one
+    that exhausted the metview retry budget above) continues from where it left
+    off when rerun with the same --work-dir. A day is only opened at all if at
+    least one of its variables is still missing, and only the missing ones are
+    pulled out of it.
+    """
     for i, d in enumerate(days):
         dstr = d.strftime("%Y%m%d")
-        day_grib = os.path.join(work_dir, f"{var}_{dstr}.crop.grb")
-        if os.path.exists(day_grib):
-            day_gribs.append(day_grib)
+        missing = [v for v in varlist if not os.path.exists(day_crop_path(work_dir, v, dstr))]
+        if not missing:
+            print(f"-- {dstr}: all {len(varlist)} variables already cropped, skipping")
             continue
+
         tar_path = os.path.join(raw_dir, f"{RAW_PREFIX}_{dstr}.tar.gz")
         if not os.path.exists(tar_path):
             raise FileNotFoundError(f"missing {tar_path} -- has it been fetched yet?")
-        raw_member = extract_member(tar_path, var, work_dir)
-        fs = read_and_crop_with_retry(raw_member, area)
-        os.remove(raw_member)
-        is_last_day = i == len(days) - 1
-        if not is_last_day:
-            fs = fs[:-1]  # drop the instant duplicated by the next day's file
-        mv.write(day_grib, fs)
-        day_gribs.append(day_grib)
 
-    combined = os.path.join(work_dir, f"{var}_combined.grb")
-    with open(combined, "wb") as out:
-        for g in day_gribs:
-            with open(g, "rb") as src:
-                shutil.copyfileobj(src, out)
-            os.remove(g)
+        t0 = time.time()
+        print(f"-- {dstr}: {len(missing)} variable(s) from one pass over "
+              f"{os.path.basename(tar_path)}", flush=True)
+        members = extract_day_members(tar_path, missing, work_dir)
+        t_gunzip = time.time() - t0
+
+        # Only the LAST requested day keeps its 24:00 instant; every other day's
+        # final field is the next day's first.
+        is_last_day = i == len(days) - 1
+        for var in missing:
+            raw_member = members[var]
+            try:
+                fs = read_and_crop_with_retry(raw_member, area)
+                if not is_last_day:
+                    fs = fs[:-1]
+                mv.write(day_crop_path(work_dir, var, dstr), fs)
+            finally:
+                # Ten uncropped members is ~3.3 GB; drop each as soon as it has
+                # been cropped rather than holding the whole day on disk.
+                os.remove(raw_member)
+        print(f"   {t_gunzip:.0f}s decompress + {time.time() - t0 - t_gunzip:.0f}s crop",
+              flush=True)
+
+    combined = {}
+    for var in varlist:
+        out_path = os.path.join(work_dir, f"{var}_combined.grb")
+        with open(out_path, "wb") as out:
+            for d in days:
+                g = day_crop_path(work_dir, var, d.strftime("%Y%m%d"))
+                with open(g, "rb") as src:
+                    shutil.copyfileobj(src, out)
+                os.remove(g)
+        combined[var] = out_path
     return combined
 
 
@@ -178,11 +249,12 @@ def main() -> None:
     print(f"work dir: {work_dir}")
 
     try:
+        combined = build_forcing_gribs(VARLIST, days, args.raw_dir, work_dir, area)
+
         per_var_nc = []
         for var in VARLIST:
             print(f"-- {var} --")
-            combined_grib = build_variable_grib(var, days, args.raw_dir, work_dir, area)
-            fs = mv.read(combined_grib)
+            fs = mv.read(combined[var])
             if var == "Rainf":
                 short = mv.grib_get_string(fs, "shortName")[0]
                 if short != "tp":
