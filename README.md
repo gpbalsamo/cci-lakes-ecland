@@ -22,8 +22,29 @@ Unlike the two flux-tower repos (`plumber2-ecland`'s 170 PLUMBER2 sites, `fluxne
 Only Ladoga (`Ld-001`) is registered so far — see `sites/lakes.csv`. Benchmark period: **2017-2022** (6 full calendar years); forcing is fetched through 2023-01-01 00:00 since ecLand needs that instant as the boundary driving the last timestep of 2022 (see `../ecland-portal`'s README, "The simulated period, and NSTOP").
 
 - **Physiography** (`clim/CCI_LAKES/surfclim_Ld-001_2017-2022.nc`, `surfinit_...`): done. Staged from ecland-portal job `20260904T120600_Ld-001` (a physiography-only rerun) and relabelled from its `2017-2026` placeholder end-date to `2017-2022` with `stage_portal_job.sh --years` — surfclim/surfinit don't depend on end_date at all, so no re-extraction was needed.
-- **Forcing**: downloading. `get_forcing_ecfs.sh 20170101 20230101` (2192 days, ~4.5 TB) is running as SLURM job `32771319` (`scripts/get_forcing_ecfs.sbatch`, ~24h wall clock at concurrency 8) into `$SCRATCH/cci-lakes-ecland/forcing/raw/`. Check progress with `squeue -u $USER -n get-forcing-ecfs` or `ls $SCRATCH/cci-lakes-ecland/forcing/raw | wc -l` (2192 when complete).
-- **Point extraction + metview processing** of the raw daily GRIB into ecLand-ready forcing: not started. **Model run, post-processing and benchmarking**: not started — see [Open work](#open-work).
+- **Forcing**: downloading. `get_forcing_ecfs.sh 20170101 20230101` (2192 days, ~4.5 TB) is running as SLURM job `32772430` (`scripts/get_forcing_ecfs.sbatch`, at concurrency 8) into `$SCRATCH/cci-lakes-ecland/forcing/raw/`. Check progress with `squeue -u $USER -n get-forcing-ecfs` or `ls $SCRATCH/cci-lakes-ecland/forcing/raw | wc -l` (2192 when complete).
+- **Point extraction** of the raw daily GRIB into ecLand-ready forcing: written (`scripts/extract_point_forcing_ecfs.py`) and **validated end-to-end** — see below.
+- **Model run**: validated on a 10-day smoke test (`Ld-001_2017-2017`, 2017-01-01 to 2017-01-11) — see [End-to-end smoke test](#end-to-end-smoke-test-validated) and, critically, [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
+
+### End-to-end smoke test (validated)
+
+Confirms the full pipeline works: ECFS fetch → point extraction → namelist → ecLand run → physically sensible FLake output.
+
+```bash
+python3 scripts/extract_point_forcing_ecfs.py \
+  --raw-dir $SCRATCH/cci-lakes-ecland/forcing/raw \
+  --start 20170101 --end 20170110 --lat 60.765 --lon 31.648 \
+  --out forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2017.nc
+# clim/CCI_LAKES/{surfclim,surfinit}_Ld-001_2017-2017.nc copied from the
+# 2017-2022 versions (content is identical for this sub-range)
+python3 scripts/ecland_create_namelist.py -g CCI_LAKES \
+  -n namelists/namelist_ecland_lake_ctl -s Ld-001_2017-2017 \
+  -d . -w output -t ecfs
+# then hand-correct NSTOP: nforcing-2 -> nforcing-1 (239 -> 240 here; see the
+# NSTOP note under step 4 below) before running
+```
+
+Result: `AvgSurfT` cools from 274.71 K to 271.9 K over the 10 days (a January cold snap), the surface freezes (hits 273.15 K and holds), and ice forms (`HLICE` 0 → 0.16 m) — physically exactly what's expected for Ladoga in January. **This only works with the right ecland-master binary — see Known issues.**
 
 ## Quick start
 
@@ -47,20 +68,34 @@ Copies whatever the job has produced — `clim/CCI_LAKES/`, `forcing/CCI_LAKES/`
 
 ### 3. Turn the raw GRIB into ecLand-ready forcing
 
-Not written yet — see [Open work](#open-work). Once it exists, this produces `forcing/CCI_LAKES/met_*_Ld-001_2017-2022.nc` from `forcing/raw/`.
+```bash
+python3 scripts/extract_point_forcing_ecfs.py \
+  --raw-dir $SCRATCH/cci-lakes-ecland/forcing/raw \
+  --start 20170101 --end 20230101 \
+  --lat 60.765 --lon 31.648 \
+  --out forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2022.nc
+```
 
-### 4. Run (or re-run with a different namelist)
+Crops the global daily GRIB to the point, drops the one-instant overlap between consecutive days, and writes the same schema `ecland_create_namelist.py` and the model already expect. Resumable (`--work-dir` keeps per-day intermediates; a day already cropped is reused rather than re-fetched/re-cropped) — useful since this runs for as long as `forcing/raw/` takes to fill in behind it. Needs the create_forcing extraction module set (`ecmwf-toolbox/new python3/new netcdf4/new`, plus `cdo`), not the model-run set — see [Known issues](#known-issues).
+
+### 4. Generate the namelist and run
+
+```bash
+python3 scripts/ecland_create_namelist.py \
+  -g CCI_LAKES -n namelists/namelist_ecland_lake_ctl \
+  -s Ld-001_2017-2022 -d . -w output -t ecfs
+```
+
+**Fix `NSTOP` by hand before running** — the generator computes `nforcing - 2`, one short of the permitted maximum `nforcing - 1` (see `../ecland-portal`'s README, "The simulated period, and NSTOP" — the same off-by-one plumber2-ecland's copy of this script has). Then:
 
 ```bash
 scripts/ecland_run_experiment.sh \
-  -g CCI_LAKES \
-  -t <forcing-type-from-step-3> \
-  -s Ld-001_2017-2022 \
+  -g CCI_LAKES -t ecfsHT -s Ld-001_2017-2022 \
   -n namelists/namelist_ecland_lake_ctl \
   -x <path_to_ecland_executable>
 ```
 
-`-n` defaults to `namelists/namelist_ecland_lake_ctl` if omitted. If a portal job's own run was staged instead (`output/<STA>__portal_<job_id>/`, see step 2), that is already a valid simulation and this step is only needed for a namelist variant.
+**The executable choice matters more than anything else here — see [Known issues](#known-issues) before picking one.** `-n` defaults to `namelists/namelist_ecland_lake_ctl` if omitted. If a portal job's own run was staged instead (`output/<STA>__portal_<job_id>/`, see step 2), that is already a valid simulation and this step is only needed for a namelist variant.
 
 ### 5. Post-process and benchmark
 
@@ -73,9 +108,17 @@ Both are currently stubs — see [Open work](#open-work).
 
 ## Namelists
 
-`namelists/namelist_ecland_lake_ctl` is plumber2-ecland's `namelist_ecland_50R1_ctl` with one change: `LWRLKE=.TRUE.` (plumber2's copy has it off — "not active for now"), so the run writes `o_lke.nc`, the FLake state needed to score against CCI-Lakes. `LEFLAKE=.TRUE.` was already on in the source namelist: FLake runs at any grid point with lake fraction, land run or not.
+`namelists/namelist_ecland_lake_ctl` is plumber2-ecland's `namelist_ecland_50R1_ctl`, unchanged except for the model id string. `LEFLAKE=.TRUE.` was already on in the source namelist: FLake runs at any grid point with lake fraction, land run or not. `LWRLKE` is left `.FALSE.` — see [Known issues](#known-issues) for why, and for where lake state actually comes from instead (`o_gg.nc`, not `o_lke.nc`).
 
 Name new variants `namelist_ecland_lake_<variant>`, matching the plumber2-ecland convention.
+
+## Known issues
+
+**The ecland-master binary you pick matters more than anything in the namelist, and picking the wrong one fails silently.** Confirmed 2026-09-04 on the 10-day Ladoga smoke test: `/perm/pad/ecland-build/bin/ecland-master` (single-precision) runs to completion, writes all expected output files, and reports no error — but every FLake variable in `o_gg.nc` (`AvgSurfT`, `TLMNW`, `TLWML`, `TLBOT`, `HLICE`, `HLML`) jumps to a constant default (288.15 K / 50 m) after the *first* timestep and never moves again, for the entire run. `/perm/pad/ecland/build/bin/ecland-master-dp` (double-precision), run against the byte-identical namelist, forcing and physiography, instead produces a physically evolving lake state (cooling, then freezing, in a January cold snap) — matching an independent reference run (ecland-portal job `20260904T145308_Ld-004`, MARS-forced, 1 day) exactly on the overlapping period. **Use `ecland-master-dp`.** The single-precision build is not merely lower-precision here; something in it silently drops FLake to a fallback state.
+
+**`o_lke.nc` cannot be produced by any locally available build.** Tried with `LWRLKE=.TRUE.` on all four builds under `$PERM` (`ecland-build`, `ecland-build_dev`, `ecland-build_v1.0`, and `ecland-master-dp` itself) — every one aborts with `NETCDF-FILE o_lke.nc not Available ! check previous model versions`; the namelist flag exists but the writer isn't compiled into any of these binaries. This doesn't block anything, though: `o_gg.nc` already carries FLake's complete prognostic state per grid point (see the namelist's own comment for the field list) — that's what `scripts/postproc_lake.py` should read once it's implemented, not `o_lke.nc`.
+
+**`ecland_run_model.sh` needs its output directory pre-created.** `abs_path()` on `OUTPUTDIR/STA` runs before the script's own `mkdir -p ${OUTPUTDIR}`, so a fresh `-o` target fails with a `cd: No such file or directory` from inside `abs_path`, not a clearer error at the point of use. `ecland_run_experiment.sh` doesn't hit this (its `OUTPUT_DIR` defaults to an existing `output/`, or you're expected to have created a custom one) — but calling `ecland_run_model.sh` directly, as the smoke test above does, needs `mkdir -p output` (or whatever `-o` names) first.
 
 ## Repository layout
 
@@ -110,9 +153,9 @@ Note: `forcing/raw/` and `forcing/logs/` above live under `$SCRATCH/cci-lakes-ec
 
 ## Open work
 
-- **Write the point-extraction / metview processing step** that turns `forcing/raw/*.tar.gz` (global daily GRIB) into ecLand-ready, point-extracted forcing NetCDF for Ladoga — the ECFS equivalent of what `../ecland-portal`'s `extract_create_forcing.bash` does for a fresh MARS retrieval (see its `osm_pyutils/process_site_var.py` for the point-selection logic to reuse rather than reimplement).
+- **Run the full 2017-2022 simulation** once `forcing/raw/` finishes downloading: extract point forcing for the full range (step 3), regenerate the namelist with the NSTOP fix (step 4), and run with `ecland-master-dp` (see [Known issues](#known-issues)).
 - **Source the ESA-CCI-Lakes observational product.** Most likely the lake surface water temperature (LSWT) product; possibly also ice cover/duration. Nothing CCI-Lakes-shaped was found under `$PERM` while setting this repo up.
-- **Implement `postproc_lake.py`** once a run has produced a real `o_lke.nc` to inspect — confirm FLake's output variable names against that file (or `yos_flake.F90` in the ecLand source) rather than guessing them ahead of time.
+- **Implement `postproc_lake.py`** to read the FLake fields from `o_gg.nc` (see [Known issues](#known-issues) for the field list — confirmed present and physically evolving on the smoke test) into whatever schema `benchmark_lake.py` ends up scoring against.
 - **Implement `benchmark_lake.py`** once both of the above exist — likely following `plumber2-ecland/scripts/benchmark_plumber2.py`'s shape (per-site scores, self-contained HTML dashboard), scored per lake instead of per flux tower.
 - **Add more lakes** to `sites/lakes.csv` as further ecland-portal jobs are run for them.
 

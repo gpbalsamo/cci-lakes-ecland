@@ -37,8 +37,8 @@ collide with Ctpf, which legitimately carries shortName 'cp'.
 The day loop is OUTER and the variable loop INNER, which is not incidental: one
 daily tarball is 2.1 GB of gzip whose member index sits at the end, so opening it
 costs a full decompression. Taking one variable per open meant gunzipping each
-day ten times over -- ~50 s per variable-day measured, against 25-32 s to
-decompress once and take all ten members in a single streaming pass.
+day ten times over -- ~500 s per day measured, against 51 s to decompress once
+and take all ten members in a single streaming pass.
 
 GRIB messages concatenate at the byte level (each is self-delimited), so
 per-day, per-variable fieldsets are cropped and (except the last day)
@@ -102,10 +102,13 @@ def extract_day_members(tar_path: str, wanted: list, dest_dir: str) -> dict:
     This is the whole reason the day loop is outer (see build_forcing_gribs).
     Opening a 2.1 GB .tar.gz costs a full decompression of the stream -- the
     member index lives at the end -- so pulling one member per open meant
-    gunzipping the same file ten times, once per variable. Measured: ~50 s per
-    variable-day, i.e. ~8 min per day of forcing, against 25-32 s to decompress
-    once and take all ten. Over Ladoga's 2017-2022 benchmark (2192 days) that is
-    the difference between ~290 h and ~36 h.
+    gunzipping the same file ten times, once per variable.
+
+    MEASURED on forcing_od_1_oper_1_20170101.tar.gz (2.1 GB, 10 x 330 MB members):
+        one member per open, x10   ~500 s  (~50 s per variable-day)
+        all ten in one pass          51 s
+    Over Ladoga's 2017-2022 benchmark (2192 days) that is the difference between
+    roughly 290 h and 36 h of forcing extraction.
 
     Iterating `for member in tf` rather than calling tf.getmembers() and then
     tf.extract() per member matters for the same reason: extract() may seek

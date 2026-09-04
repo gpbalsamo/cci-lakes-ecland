@@ -6,10 +6,24 @@
 ! granted to it by virtue of its status as an intergovernmental organisation
 ! nor does it submit to any jurisdiction.
 !
-! Based on plumber2-ecland's namelist_ecland_50R1_ctl. LEFLAKE was already .TRUE.
-! there (FLake runs wherever a grid point has lake fraction, land or not), so the
-! only change for a lake-focused run is LWRLKE=.TRUE. below, to get the o_lke
-! lake-variable output needed to benchmark against ESA-CCI-Lakes observations.
+! Based on plumber2-ecland's namelist_ecland_50R1_ctl. LEFLAKE is already
+! .TRUE. there (FLake runs wherever a grid point has lake fraction, land or
+! not). LWRLKE was tried as .TRUE. to get o_lke lake-variable output for
+! CCI-Lakes benchmarking, but every locally available ecland-master build
+! checked 2026-09-04 -- ecland-build, ecland-build_dev, ecland-build_v1.0,
+! AND ecland/build/bin/ecland-master-dp -- aborts with "NETCDF-FILE o_lke.nc
+! not Available ! check previous model versions": the namelist flag exists
+! but the writer was never built into any of these binaries. Left .FALSE.
+! DON'T RE-TRY THIS without a newer ecland-master build first.
+!
+! Lake surface state doesn't need o_lke.nc anyway: o_gg.nc already carries
+! FLake's full prognostic set per grid point -- AvgSurfT (skin), TLWML
+! (mixed-layer temp, the LSWT proxy), TLMNW (mean water temp), TLBOT (bottom
+! temp), TLICE (ice temp), HLML (mixed-layer depth), HLICE (ice thickness).
+! That's what scripts/postproc_lake.py should read from. See cci-lakes-ecland's
+! README, "Known issues", for which ecland-master binary to run this with --
+! it matters far more than LWRLKE: a wrong one silently produces a constant,
+! unphysical lake state instead of erroring.
 
 &NAMCT01S
     NSTART={nstart}          ! first timestep of model 0
@@ -67,7 +81,7 @@
     LWRVEG=.TRUE.            ! logical, write o_veg - output vegetation 2D high/low veg
     LWRVTY=.TRUE.            ! logical, write o_vty - output vegetation 2D high/low veg biomass
     LWRTIL=.FALSE.           ! logical, write o_til - output tiles 2D (tile) state
-    LWRLKE=.TRUE.            ! logical, write o_lke - output lake variables (FLake state, needed to benchmark against CCI-Lakes)
+    LWRLKE=.FALSE.           ! logical, write o_lke - not implemented in any locally available build; see header comment
     LSEMISS=.FALSE.          ! LOGICAL : EMISSIVITY SET TO CONSTANT VALUE REMISS
     LDBGS1=.FALSE.           ! LOGICAL : PRINT DEBUG INFO, EG FORCING DATA (DEFAULT=FALSE)
     IDBGS1=-1                ! Debug level : output printing. -1 for no prints.
