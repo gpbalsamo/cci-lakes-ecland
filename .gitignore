@@ -1,0 +1,50 @@
+# ecLand runtime and generated output
+scripts/work/
+work/
+output/*
+!output/.gitkeep
+postprocessed/
+benchmark/models/
+results/
+logs/
+*.log
+*.out
+*.err
+
+# Forcing and climatology staged from ecland-portal jobs -- regenerable from
+# the job directory via scripts/stage_portal_job.sh, not checked in.
+forcing/*/*
+!forcing/*/.gitkeep
+clim/*/*
+!clim/*/.gitkeep
+
+# ESA-CCI-Lakes observational product -- not sourced yet; once it is, decide
+# then whether it is small enough to check in or needs Git LFS.
+obs/*
+!obs/.gitkeep
+
+# Per-job provenance snapshots (request.json etc.) staged by
+# scripts/stage_portal_job.sh -- useful locally, but regenerable from the job
+# directory and not meant to accumulate in git history.
+sites/provenance/
+
+# Scheduler output
+slurm-*.out
+ecsbatch.log.*
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Temporary and editor files
+*.tmp
+*.temp
+*~
+.#*
+.DS_Store
+
+# Local environments
+.env
+.venv/
+venv/

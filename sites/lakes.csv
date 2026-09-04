@@ -1,0 +1,2 @@
+site_id,lake_name,country,lat,lon,which_surface,start_date,end_date,forcing_source,portal_job_id,status,notes
+Ld-001,Lake Ladoga,Russia,60.765,31.648,lake,2017-01-01,2026-01-01,oper,20260904T111326_Ld-001,forcing_in_progress,Domain-mode extraction via ecland-portal; run_landgram/run_namelist/run_model also requested for this job
