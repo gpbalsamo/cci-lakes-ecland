@@ -157,7 +157,7 @@ Note: `forcing/raw/` and `forcing/logs/` above live under `$SCRATCH/cci-lakes-ec
 - **Source the ESA-CCI-Lakes observational product.** Most likely the lake surface water temperature (LSWT) product; possibly also ice cover/duration. Nothing CCI-Lakes-shaped was found under `$PERM` while setting this repo up.
 - **Implement `postproc_lake.py`** to read the FLake fields from `o_gg.nc` (see [Known issues](#known-issues) for the field list — confirmed present and physically evolving on the smoke test) into whatever schema `benchmark_lake.py` ends up scoring against.
 - **Implement `benchmark_lake.py`** once both of the above exist — likely following `plumber2-ecland/scripts/benchmark_plumber2.py`'s shape (per-site scores, self-contained HTML dashboard), scored per lake instead of per flux tower.
-- **Add more lakes** to `sites/lakes.csv` as further ecland-portal jobs are run for them.
+- **Add more lakes** to `sites/lakes.csv` as further ecland-portal jobs are run for them. `sites/candidate_lakes.csv` holds six candidates to try after Ladoga (Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana, Victoria) with the physical parameters (area, mean/max depth, elevation) needed to sanity-check each extraction, not yet run through ecland-portal.
 
 ## License
 

@@ -1,0 +1,7 @@
+site_id,lake_name,country,lat,lon,elevation_m,area_km2,mean_depth_m,max_depth_m,which_surface,status,notes
+Br-001,Lake Baringo,Kenya,0.6334,36.0750,970.0,130.0,5.0,12.0,lake,candidate,"Shallow rift-valley lake; small area and mean depth make it a useful contrast to Ladoga for FLake sensitivity."
+Ch-001,Lake Chilwa,Malawi;Mozambique,-15.2834,35.7000,627.0,687.0,2.0,6.0,lake,candidate,"Very shallow (mean depth 2 m), endorheic; transboundary Malawi/Mozambique -- confirm ecland-portal accepts a semicolon-separated country before extraction."
+Ky-001,Lake Kyoga,Uganda,1.5833,32.8792,1720.0,1720.0,3.0,5.7,lake,candidate,"Shallow, swampy lake at high elevation (1720 m) -- area and elevation are numerically identical in the source table (both 1720.0), worth double-checking against another source before extraction."
+Mw-001,Lake Mweru Wantipa,Zambia,-8.7250,29.7209,932.0,1500.0,2.0,5.0,lake,candidate,"Shallow, seasonally variable Zambian lake."
+Ta-001,Lake Tana,Ethiopia,11.9542,37.3084,1788.0,3600.0,9.0,14.0,lake,candidate,"Source of the Blue Nile; largest lake in Ethiopia."
+Vi-001,Lake Victoria,Tanzania;Uganda;Kenya,-1.2625,33.2334,1135.0,68800.0,40.0,84.0,lake,candidate,"Africa's largest lake by area (68800 km2) -- second largest freshwater lake in the world; three-country transboundary, largest domain-extraction box of this set."
