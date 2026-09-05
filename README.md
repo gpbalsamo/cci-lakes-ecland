@@ -2,7 +2,7 @@
 
 Scripts and configuration to run [ecLand](https://www.ecmwf.int/en/research/modelling-systems/land-surface) (specifically its [FLake](https://www.flake.igb-berlin.de/) lake scheme) over lakes from the [ESA Climate Change Initiative Lakes](https://climate.esa.int/en/projects/lakes/) (CCI Lakes) project, and to benchmark the result against CCI-Lakes observations.
 
-Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. See [Current status](#current-status).
+Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. Full 2017-2022 forcing is downloaded, a full-year spin-up run has converged, and six candidate lakes are lined up to try next (`sites/candidate_lakes.csv`). See [Current status](#current-status).
 
 ## Relationship to sibling repos
 
@@ -22,9 +22,9 @@ Unlike the two flux-tower repos (`plumber2-ecland`'s 170 PLUMBER2 sites, `fluxne
 Only Ladoga (`Ld-001`) is registered so far — see `sites/lakes.csv`. Benchmark period: **2017-2022** (6 full calendar years); forcing is fetched through 2023-01-01 00:00 since ecLand needs that instant as the boundary driving the last timestep of 2022 (see `../ecland-portal`'s README, "The simulated period, and NSTOP").
 
 - **Physiography** (`clim/CCI_LAKES/surfclim_Ld-001_2017-2022.nc`, `surfinit_...`): done. Staged from ecland-portal job `20260904T120600_Ld-001` (a physiography-only rerun) and relabelled from its `2017-2026` placeholder end-date to `2017-2022` with `stage_portal_job.sh --years` — surfclim/surfinit don't depend on end_date at all, so no re-extraction was needed.
-- **Forcing**: downloading. `get_forcing_ecfs.sh 20170101 20230101` (2192 days, ~4.5 TB) is running as SLURM job `32772430` (`scripts/get_forcing_ecfs.sbatch`, at concurrency 8) into `$SCRATCH/cci-lakes-ecland/forcing/raw/`. Check progress with `squeue -u $USER -n get-forcing-ecfs` or `ls $SCRATCH/cci-lakes-ecland/forcing/raw | wc -l` (2192 when complete).
-- **Point extraction** of the raw daily GRIB into ecLand-ready forcing: written (`scripts/extract_point_forcing_ecfs.py`) and **validated end-to-end** — see below.
-- **Model run**: validated on a 10-day smoke test (`Ld-001_2017-2017`, 2017-01-01 to 2017-01-11) — see [End-to-end smoke test](#end-to-end-smoke-test-validated) and, critically, [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
+- **Forcing**: done. The full 2017-2022 raw daily GRIB (2192 days, 4.2 TB) is in `$SCRATCH/cci-lakes-ecland/forcing/raw/`.
+- **Point extraction** of the raw daily GRIB into ecLand-ready forcing: written (`scripts/extract_point_forcing_ecfs.py`, `.sbatch` wrapper) and **validated end-to-end** — see below. The full 2017 year is extracted; 2018-2022 (one SLURM job per year, run in parallel — safer than one long job given a ~48h wall-clock limit and that the final NetCDF is only written once every day for every variable is done) are in progress.
+- **Model run**: validated on a 10-day smoke test and a **full-year spin-up/convergence check** — see [End-to-end smoke test](#end-to-end-smoke-test-validated) and, critically, [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
 
 ### End-to-end smoke test (validated)
 
@@ -45,6 +45,12 @@ python3 scripts/ecland_create_namelist.py -g CCI_LAKES \
 ```
 
 Result: `AvgSurfT` cools from 274.71 K to 271.9 K over the 10 days (a January cold snap), the surface freezes (hits 273.15 K and holds), and ice forms (`HLICE` 0 → 0.16 m) — physically exactly what's expected for Ladoga in January. **This only works with the right ecland-master binary — see Known issues.**
+
+### Spin-up / convergence check (validated)
+
+Once a full year of forcing exists, `ecland_run_model.sh -l N` repeats it N times, each loop restarting from the previous loop's end state (`ecland_run_model.sh`'s existing spin-up mechanism — no new script needed for the run itself). `scripts/check_spinup_convergence.py OUTPUT_DIR N` reads the end-of-year FLake state (`AvgSurfT`, `TLMNW`, `TLWML`, `TLBOT`, `HLML`, `HLICE`) from every loop's `o_gg_S<n>.nc` and reports how far apart consecutive loops are — the standard spin-up diagnostic.
+
+Run for Ladoga, full 2017, 8 loops: end-of-year state stabilises within 2-3 loops (loop 1→2 changes by up to 0.35 K / 0.35 m; by loop 5→8 the largest change is under 0.0005 K) — Ladoga's ~66 m depth spins up fast in FLake's bulk mixed-layer scheme. Worth re-checking per lake once the candidates in `sites/candidate_lakes.csv` are run: a shallower lake (e.g. Chilwa, 2 m mean depth) should converge even faster; whether depth vs. convergence speed holds as a general pattern across the set is an open question.
 
 ## Quick start
 
@@ -125,17 +131,21 @@ Name new variants `namelist_ecland_lake_<variant>`, matching the plumber2-ecland
 ```
 cci-lakes-ecland/
 ├── sites/
-│   ├── lakes.csv                # registry: one row per lake (site_id, lat/lon, dates, portal job, status)
+│   ├── lakes.csv                # registry: one row per lake actually staged/run (site_id, lat/lon, dates, portal job, status)
+│   ├── candidate_lakes.csv      # lakes to try next -- physical parameters only, not yet extracted
 │   └── provenance/<job_id>/     # request.json etc. from each staged ecland-portal job -- not in git
 ├── namelists/                   # ecLand namelist configurations
 ├── scripts/
 │   ├── get_forcing_ecfs.sh      # fetch daily raw 'oper' GRIB tarballs from ECFS
 │   ├── get_forcing_ecfs.sbatch  # \_ batch wrapper, for a multi-day pull
+│   ├── extract_point_forcing_ecfs.py    # crop raw GRIB to one point -> ecLand-ready forcing NetCDF
+│   ├── extract_point_forcing_ecfs.sbatch # \_ batch wrapper, for a multi-day extraction
 │   ├── stage_portal_job.sh      # import an ecland-portal job into this repo's layout
 │   ├── ecland_run_experiment.sh # run one or more site experiments (vendored from plumber2-ecland)
 │   ├── ecland_run_model.sh      # \_ vendored from plumber2-ecland, unmodified engine logic
 │   ├── ecland_runtime.sh        # /
 │   ├── ecland_create_namelist.py# /
+│   ├── check_spinup_convergence.py # read end-of-loop FLake state from an -l N run, report loop-to-loop change
 │   ├── postproc_lake.py         # STUB: raw ecLand output -> lake variable schema
 │   └── benchmark_lake.py        # STUB: score against ESA-CCI-Lakes observations
 ├── clim/CCI_LAKES/              # staged physiography/init (NetCDF) -- not in git
