@@ -2,7 +2,7 @@
 
 Scripts and configuration to run [ecLand](https://www.ecmwf.int/en/research/modelling-systems/land-surface) (specifically its [FLake](https://www.flake.igb-berlin.de/) lake scheme) over lakes from the [ESA Climate Change Initiative Lakes](https://climate.esa.int/en/projects/lakes/) (CCI Lakes) project, and to benchmark the result against CCI-Lakes observations.
 
-Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. The full 2017-2022 benchmark period has been simulated end-to-end, and six candidate lakes are lined up to try next (`sites/candidate_lakes.csv`). See [Current status](#current-status).
+Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. The full 2017-2022 benchmark period has been simulated end-to-end and properly spun up; six candidate lakes (`sites/candidate_lakes.csv`) are now moving through the same pipeline. See [Current status](#current-status).
 
 ## Relationship to sibling repos
 
@@ -15,16 +15,24 @@ This repo does not re-derive the ecLand run/namelist machinery; it reuses it.
 
 Unlike the two flux-tower repos (`plumber2-ecland`'s 170 PLUMBER2 sites, `fluxnet-shuttle-ecland`'s 775 FLUXNET sites), there is no in-situ forcing or observation dataset to pull from Git LFS here: physiography comes from an ecland-portal extraction, forcing from ECFS (see below), and the evaluation data is a satellite product (CCI-Lakes), not a flux tower.
 
-**Forcing does *not* come from ecland-portal's own MARS retrieval.** That path (`run_forcing: true`, whole-month MARS requests) runs at roughly 1 hour of wall clock per month spanned, which made a 6-year pull impractical — the first attempt (job `20260904T111326_Ld-001`) was cancelled after 51 minutes, still in its first month. ECFS already holds the same `class od stream oper expver 1` fields as daily global GRIB tarballs going back to at least 2016, at `/paga/OSM_FORCING/forcing_od_1_oper_1_<YYYYMMDD>.tar.gz` (~2.1 GB/day for 2017 onward). `scripts/get_forcing_ecfs.sh` pulls those with `ecp` instead, skipping MARS entirely. This only stages the raw global GRIB, though — turning it into ecLand-ready, point-extracted forcing (the equivalent of `met_*HT_*.nc`) is a separate step, not yet written (see [Open work](#open-work)).
+**Forcing does *not* come from ecland-portal's own MARS retrieval.** That path (`run_forcing: true`, whole-month MARS requests) runs at roughly 1 hour of wall clock per month spanned, which made a 6-year pull impractical — the first attempt (job `20260904T111326_Ld-001`) was cancelled after 51 minutes, still in its first month. ECFS already holds the same `class od stream oper expver 1` fields as daily global GRIB tarballs going back to at least 2016, at `/paga/OSM_FORCING/forcing_od_1_oper_1_<YYYYMMDD>.tar.gz` (~2.1 GB/day for 2017 onward). `scripts/get_forcing_ecfs.sh` pulls those with `ecp` instead, skipping MARS entirely, and `scripts/extract_point_forcing_ecfs.py` turns the raw global GRIB into ecLand-ready, point-extracted forcing.
+
+`../ecland-portal` has since grown its own `use_forcing_archive` request option pointing at this same `forcing/raw/` archive and this same extractor script (see its `config/defaults.yaml`'s `forcing_archive` block) — so a portal job *can* read from the archive natively. It is not used for the multi-year runs in this repo, though: the orchestrator's per-job wall-clock budget defaults to 90 minutes (`GET /healthz`'s `time_limit`), far short of what even a single year's extraction needs (~7-8h), so a portal request spanning more than a few days would simply time out. This repo keeps forcing extraction as its own directly-submitted, per-year SLURM jobs (see step 3) for that reason — only physiography goes through the portal.
 
 ## Current status
 
-Only Ladoga (`Ld-001`) is registered so far — see `sites/lakes.csv`. Benchmark period: **2017-2022** (6 full calendar years); forcing is fetched through 2023-01-01 00:00 since ecLand needs that instant as the boundary driving the last timestep of 2022 (see `../ecland-portal`'s README, "The simulated period, and NSTOP").
+See `sites/lakes.csv` (lakes with a full pipeline run) and `sites/candidate_lakes.csv` (lakes in progress or not yet started). Benchmark period for all lakes: **2017-2022** (6 full calendar years); forcing is fetched through 2023-01-01 00:00 since ecLand needs that instant as the boundary driving the last timestep of 2022 (see `../ecland-portal`'s README, "The simulated period, and NSTOP").
+
+### Ladoga (`Ld-001`) — complete
 
 - **Physiography** (`clim/CCI_LAKES/surfclim_Ld-001_2017-2022.nc`, `surfinit_...`): done. Staged from ecland-portal job `20260904T120600_Ld-001` (a physiography-only rerun) and relabelled from its `2017-2026` placeholder end-date to `2017-2022` with `stage_portal_job.sh --years` — surfclim/surfinit don't depend on end_date at all, so no re-extraction was needed.
-- **Forcing**: done. The full 2017-2022 raw daily GRIB (2192 days, 4.2 TB) is in `$SCRATCH/cci-lakes-ecland/forcing/raw/`.
+- **Forcing**: done. The full 2017-2022 raw daily GRIB (2192 days, 4.2 TB) is in `$SCRATCH/cci-lakes-ecland/forcing/raw/` — this is a *global* archive, reused as-is for every other lake too, no new ECFS download needed per lake.
 - **Point extraction and merge**: done. `scripts/extract_point_forcing_ecfs.py` run once per year (2018-2022 in parallel — safer than one ~48h job given the final NetCDF is only written once every day for every variable is done), then `scripts/merge_yearly_forcing.py` joined the six years into `forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2022.nc` (52585 uniformly-spaced hourly timesteps, no gaps, no NaNs).
-- **Model run**: the full 2017-2022 period has been simulated end-to-end (see [Full benchmark-period run](#full-benchmark-period-run-validated)), on top of the earlier 10-day smoke test and full-year spin-up check — see [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
+- **Model run**: the full 2017-2022 period has been simulated end-to-end and **properly spun up** (see [Full benchmark-period run](#full-benchmark-period-run-validated-spun-up)), on top of the earlier 10-day smoke test and full-year spin-up check — see [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
+
+### Candidate lakes — in progress
+
+Six lakes from `sites/candidate_lakes.csv` (Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana, Victoria) are moving through the same pipeline: an ecland-portal physiography-only job per lake (mirroring Ladoga's `20260904T120600_Ld-001`), plus 6 years × 6 lakes = 36 parallel per-year point-extraction jobs against the already-downloaded raw archive (no new ECFS transfer needed). Once both finish per lake: merge, generate the namelist, spin-up check, then a properly spun-up full-period run — the same four steps Ladoga already went through.
 
 ### End-to-end smoke test (validated)
 
@@ -52,9 +60,19 @@ Once a full year of forcing exists, `ecland_run_model.sh -l N` repeats it N time
 
 Run for Ladoga, full 2017, 8 loops: end-of-year state stabilises within 2-3 loops (loop 1→2 changes by up to 0.35 K / 0.35 m; by loop 5→8 the largest change is under 0.0005 K) — Ladoga's ~66 m depth spins up fast in FLake's bulk mixed-layer scheme. Worth re-checking per lake once the candidates in `sites/candidate_lakes.csv` are run: a shallower lake (e.g. Chilwa, 2 m mean depth) should converge even faster; whether depth vs. convergence speed holds as a general pattern across the set is an open question.
 
-### Full benchmark-period run (validated)
+### Full benchmark-period run (validated, spun up)
 
-With all six years merged (see step 3 below), a single `ecland_run_model.sh -l 1` pass over 2017-2022 (52584 hourly steps) runs in ~2 minutes on `ecland-master-dp`. No NaNs, no drift: `AvgSurfT` stays in [253, 295] K across the whole period, ~12100 of the 52585 hours (~23%) carry ice (`HLICE > 0`), and end-of-year state varies year to year (274-277 K) the way real inter-annual variability should, not runaway divergence. This run used a cold start (no spin-up loop) — for an actual scored benchmark, prepend a spin-up loop over 2017 first (see above), since the first ~1-2 years of a cold-start run are not yet at the lake's equilibrium state.
+With all six years merged (see step 3 below), a single `ecland_run_model.sh -l 1` pass over 2017-2022 (52584 hourly steps) runs in ~2 minutes on `ecland-master-dp`. No NaNs, no drift: `AvgSurfT` stays in [253, 295] K across the whole period, ice covers ~23% of hours, and end-of-year state varies year to year (274-277 K) the way real inter-annual variability should, not runaway divergence.
+
+**This is now a properly spun-up run, not a cold start.** The initial cold-start pass (surfinit from ecland-portal) showed a small but real transient in year 1 (2017 end-of-year `AvgSurfT` differed by 0.033 K from the spun-up version, 2018 by 0.003 K, 2019 onward identical to 4 decimals) — consistent with the spin-up check above needing 2-3 loops to converge. To remove that transient: run the spin-up check's final loop restart (`output/Ld-001_2017-2017/restartout.nc`, the loop-8 equilibrium state from a single representative year) as the *initial conditions* for the full-period run, in place of ecland-portal's own cold-start `surfinit`/`surfclim`:
+
+```bash
+mkdir -p clim/CCI_LAKES_spunup
+cp output/Ld-001_2017-2017/restartout.nc clim/CCI_LAKES_spunup/surfinit_Ld-001_2017-2022.nc
+cp output/Ld-001_2017-2017/restartout.nc clim/CCI_LAKES_spunup/surfclim_Ld-001_2017-2022.nc
+```
+
+A `restartout.nc` can stand in for both `surfinit` and `surfclim` inputs because that is exactly what `ecland_run_model.sh`'s own `-l N` loop-chaining already does internally between loops (`ln -sf restartout_S${RLOOP}.nc soilinit` / `surfclim`) — this just does the same substitution across two separate invocations instead of within one. Then point `-i` at `clim/CCI_LAKES_spunup` instead of `clim/CCI_LAKES` for the scored run (see step 4). The cold-start run is kept alongside (`output/Ld-001_2017-2022/`) for comparison; the spun-up one (`output_spunup/Ld-001_2017-2022/`) is the one to score against observations.
 
 ## Quick start
 
@@ -107,7 +125,9 @@ python3 scripts/merge_yearly_forcing.py \
 
 Each per-year file's last timestep duplicates the next year's first (both are the Jan 1 00:00 boundary instant a year's extraction keeps so the model has what it needs to drive December's final hour) — the merge script checks for and drops that duplicate, and converts each file's own per-year time origin onto one continuous axis, refusing to write anything if the result isn't uniformly spaced.
 
-### 4. Generate the namelist and run
+### 4. Spin up, then generate the namelist and run
+
+Generate a namelist for every site-years string you'll run (both the single-year spin-up and the full-period run need one):
 
 ```bash
 python3 scripts/ecland_create_namelist.py \
@@ -115,16 +135,29 @@ python3 scripts/ecland_create_namelist.py \
   -s Ld-001_2017-2022 -d . -w output -t ecfs
 ```
 
-**Fix `NSTOP` by hand before running** — the generator computes `nforcing - 2`, one short of the permitted maximum `nforcing - 1` (see `../ecland-portal`'s README, "The simulated period, and NSTOP" — the same off-by-one plumber2-ecland's copy of this script has). Then:
+**Fix `NSTOP` by hand before running** — the generator computes `nforcing - 2`, one short of the permitted maximum `nforcing - 1` (see `../ecland-portal`'s README, "The simulated period, and NSTOP" — the same off-by-one plumber2-ecland's copy of this script has).
+
+**4a. Spin up** on one representative year (2017), looped until the end-of-year lake state stops changing:
 
 ```bash
-scripts/ecland_run_experiment.sh \
-  -g CCI_LAKES -t ecfsHT -s Ld-001_2017-2022 \
-  -n namelists/namelist_ecland_lake_ctl \
-  -x <path_to_ecland_executable>
+scripts/ecland_run_model.sh -s Ld-001_2017-2017 -b <ecland-master-dp> \
+  -w scripts/work -o output -f forcing/CCI_LAKES -i clim/CCI_LAKES \
+  -F ecfs -n output/namelist_Ld-001_2017-2017 -l 8 -R false
+python3 scripts/check_spinup_convergence.py output/Ld-001_2017-2017 8
 ```
 
-**The executable choice matters more than anything else here — see [Known issues](#known-issues) before picking one.** `-n` defaults to `namelists/namelist_ecland_lake_ctl` if omitted. If a portal job's own run was staged instead (`output/<STA>__portal_<job_id>/`, see step 2), that is already a valid simulation and this step is only needed for a namelist variant.
+**4b. Run the full period**, seeded from that spin-up's equilibrium state instead of the cold-start `surfinit`/`surfclim` (see [Full benchmark-period run](#full-benchmark-period-run-validated-spun-up) for why a `restartout.nc` can stand in for both):
+
+```bash
+mkdir -p clim/CCI_LAKES_spunup output_spunup
+cp output/Ld-001_2017-2017/restartout.nc clim/CCI_LAKES_spunup/surfinit_Ld-001_2017-2022.nc
+cp output/Ld-001_2017-2017/restartout.nc clim/CCI_LAKES_spunup/surfclim_Ld-001_2017-2022.nc
+scripts/ecland_run_model.sh -s Ld-001_2017-2022 -b <ecland-master-dp> \
+  -w scripts/work -o output_spunup -f forcing/CCI_LAKES -i clim/CCI_LAKES_spunup \
+  -F ecfs -n output/namelist_Ld-001_2017-2022 -l 1 -R false
+```
+
+**The executable choice matters more than anything else here — see [Known issues](#known-issues) before picking one.** If a portal job's own run was staged instead (`output/<STA>__portal_<job_id>/`, see step 2), that is already a valid (though not spun-up) simulation.
 
 ### 5. Post-process and benchmark
 
@@ -187,11 +220,10 @@ Note: `forcing/raw/` and `forcing/logs/` above live under `$SCRATCH/cci-lakes-ec
 
 ## Open work
 
-- **Run the full 2017-2022 simulation** once `forcing/raw/` finishes downloading: extract point forcing for the full range (step 3), regenerate the namelist with the NSTOP fix (step 4), and run with `ecland-master-dp` (see [Known issues](#known-issues)).
+- **Finish the candidate lakes.** Physiography is staged for all six (Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana, Victoria — all confirmed 100% lake fraction, depths in the right ballpark against `sites/candidate_lakes.csv`'s reference values). Per-year forcing extraction (36 jobs, 6 lakes × 6 years, against the already-downloaded raw archive) is running. Once done per lake: merge (step 3), spin-up check (step 4a), spun-up full-period run (step 4b) — same four steps Ladoga went through. Move each from `candidate_lakes.csv` into `sites/lakes.csv` as it completes.
 - **Source the ESA-CCI-Lakes observational product.** Most likely the lake surface water temperature (LSWT) product; possibly also ice cover/duration. Nothing CCI-Lakes-shaped was found under `$PERM` while setting this repo up.
-- **Implement `postproc_lake.py`** to read the FLake fields from `o_gg.nc` (see [Known issues](#known-issues) for the field list — confirmed present and physically evolving on the smoke test) into whatever schema `benchmark_lake.py` ends up scoring against.
+- **Implement `postproc_lake.py`** to read the FLake fields from `o_gg.nc` (see [Known issues](#known-issues) for the field list — confirmed present, physically evolving and stable across a full 6-year run) into whatever schema `benchmark_lake.py` ends up scoring against.
 - **Implement `benchmark_lake.py`** once both of the above exist — likely following `plumber2-ecland/scripts/benchmark_plumber2.py`'s shape (per-site scores, self-contained HTML dashboard), scored per lake instead of per flux tower.
-- **Add more lakes** to `sites/lakes.csv` as further ecland-portal jobs are run for them. `sites/candidate_lakes.csv` holds six candidates to try after Ladoga (Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana, Victoria) with the physical parameters (area, mean/max depth, elevation) needed to sanity-check each extraction, not yet run through ecland-portal.
 
 ## License
 

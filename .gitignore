@@ -3,6 +3,9 @@ scripts/work/
 work/
 output/*
 !output/.gitkeep
+# output_spunup/ etc.: an ad-hoc comparison output dir alongside output/,
+# same convention as output/ itself -- not checked in.
+output_spunup/
 postprocessed/
 benchmark/models/
 results/
