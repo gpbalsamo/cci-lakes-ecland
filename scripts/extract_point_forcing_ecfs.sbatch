@@ -23,6 +23,14 @@
 # defaults to a temp dir removed on completion -- pass one explicitly (as
 # above) to keep it, so an interrupted job resumes instead of restarting.
 #
+# CACHE_DIR (optional) overrides the shared decompression cache the extractor
+# uses by default (a '_decompressed_cache' dir next to RAW_DIR) -- every lake's
+# jobs should point at the SAME cache dir, since that is what lets a day
+# already decompressed for one lake be skipped for the next rather than
+# re-decompressed (see extract_point_forcing_ecfs.py's own docstring for the
+# measured saving: ~29% at 2 lakes, ~49% at 7, approaching ~57% as more lakes
+# share it). Set NO_CACHE=true to fall back to the pre-cache behaviour instead.
+#
 # (C) Copyright 2026- ECMWF. Apache Licence Version 2.0.
 
 set -uo pipefail
@@ -43,6 +51,11 @@ ARGS=(--raw-dir "${RAW_DIR}" --start "${START_DATE}" --end "${END_DATE}"
       --lat "${LAT}" --lon "${LON}" --out "${OUT}")
 if [[ -n "${WORK_DIR:-}" ]]; then
   ARGS+=(--keep-work-dir --work-dir "${WORK_DIR}")
+fi
+if [[ "${NO_CACHE:-false}" == "true" ]]; then
+  ARGS+=(--no-cache)
+elif [[ -n "${CACHE_DIR:-}" ]]; then
+  ARGS+=(--cache-dir "${CACHE_DIR}")
 fi
 
 source /etc/profile.d/modules.sh 2>/dev/null || true

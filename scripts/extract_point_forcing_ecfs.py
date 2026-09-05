@@ -40,6 +40,33 @@ costs a full decompression. Taking one variable per open meant gunzipping each
 day ten times over -- ~500 s per day measured, against 51 s to decompress once
 and take all ten members in a single streaming pass.
 
+SHARED DECOMPRESSION CACHE, ACROSS LAKES. Every lake needs the same days from
+the same global archive, so decompression is the one genuinely redundant cost
+across lakes (crop is not -- it depends on lat/lon). Benchmarked 2026-09-05 on
+5 days: decompress 33.8 s/day, crop ~25 s/day/lake. For 2 lakes sharing a
+cache that's 29% less total time than each decompressing separately; for 7
+lakes (this repo's Ladoga + 6 candidates) it's ~49%, approaching ~57% as more
+lakes are added and decompression becomes a smaller share of the per-lake cost.
+So decompressed members are written to --cache-dir (default: a
+`_decompressed_cache/` sibling of --raw-dir), keyed by day only -- not by lake
+-- and reused by every subsequent lake's extraction rather than each lake
+decompressing its own copy into --work-dir. A per-day lock file (`fcntl.flock`,
+blocking) serialises population of one day across concurrently-running lake
+jobs, so of several jobs racing for the same not-yet-cached day, only one
+actually decompresses it; the rest block briefly, then read the result. Once
+released, the lock does not gate reads -- multiple lakes crop the same cached
+day concurrently with no contention, since that part is lat/lon-specific and
+therefore not what the lock is protecting. Pass --no-cache to fall back to the
+old per-run behaviour (decompress into --work-dir, delete after cropping).
+
+The cache is not size-bounded or auto-pruned: caching the entire 2017-2022
+archive for every variable would be on the order of several TB (10 vars x
+2192 days, each day's tar.gz decompressing to roughly 1.5x its compressed
+size) -- worth it if this repo ends up processing many more lakes, since
+the cache only grows to cover days actually requested, but worth clearing
+by hand (`rm -rf` on --cache-dir) once a batch of lakes is done and the
+space is wanted back.
+
 GRIB messages concatenate at the byte level (each is self-delimited), so
 per-day, per-variable fieldsets are cropped and (except the last day)
 message-trimmed with metview, written to small GRIB files, and joined with
@@ -58,6 +85,7 @@ the two conflict. Also needs `cdo` for the final per-variable merge.
 """
 
 import argparse
+import fcntl
 import os
 import shutil
 import subprocess
@@ -142,6 +170,42 @@ def extract_day_members(tar_path: str, wanted: list, dest_dir: str) -> dict:
     return found
 
 
+def populate_daily_cache(tar_path: str, dstr: str, cache_dir: str) -> dict:
+    """Ensure every VARLIST member for one day is decompressed under
+    cache_dir/<dstr>/, shared across every lake that asks for this day, and
+    return {var: path}.
+
+    Locked with a per-day lock file (cache_dir/<dstr>.lock, sibling to the day
+    directory so locking does not depend on that directory already existing)
+    so concurrently-running lake jobs racing for the same not-yet-cached day
+    decompress it once, not once each. The lock is held only for the
+    check-then-populate section: once every member is confirmed present
+    (freshly written or already there) the lock is released before the caller
+    reads/crops anything, so cropping the same cached day for different lakes
+    is never serialised by this lock.
+
+    Always populates the FULL VARLIST for the day, not just what the current
+    lake happens to want -- decompression already extracts all ten members in
+    one pass (see extract_day_members), so there is no marginal cost to
+    caching the ones this call's caller does not need today but a later lake
+    will."""
+    day_dir = os.path.join(cache_dir, dstr)
+    lock_path = os.path.join(cache_dir, f"{dstr}.lock")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            paths = {var: os.path.join(day_dir, f"{var}.grb") for var in VARLIST}
+            missing = [var for var, p in paths.items() if not os.path.exists(p)]
+            if missing:
+                os.makedirs(day_dir, exist_ok=True)
+                extract_day_members(tar_path, missing, day_dir)
+            return paths
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
 def read_and_crop_with_retry(raw_member: str, area, attempts: int = 4, delay_s: float = 10.0):
     """mv.read(..., area=...) has been observed to fail intermittently with
     'Metview error: Retrieve-> Error code: 1' on an otherwise-valid input file
@@ -165,7 +229,8 @@ def day_crop_path(work_dir: str, var: str, dstr: str) -> str:
     return os.path.join(work_dir, f"{var}_{dstr}.crop.grb")
 
 
-def build_forcing_gribs(varlist: list, days: list, raw_dir: str, work_dir: str, area) -> dict:
+def build_forcing_gribs(varlist: list, days: list, raw_dir: str, work_dir: str, area,
+                         cache_dir: str = None) -> dict:
     """Crop every variable for every day, then concatenate per variable.
 
     Returns {var: combined_grib_path}.
@@ -180,6 +245,15 @@ def build_forcing_gribs(varlist: list, days: list, raw_dir: str, work_dir: str, 
     off when rerun with the same --work-dir. A day is only opened at all if at
     least one of its variables is still missing, and only the missing ones are
     pulled out of it.
+
+    cache_dir, when given, routes decompression through the shared per-day
+    cache (see populate_daily_cache) instead of decompressing straight into
+    work_dir -- so a day already decompressed for an earlier lake is never
+    re-decompressed for this one. Cropping still happens per lake either way
+    (it depends on lat/lon); only the decompressed .grb members are shared,
+    and only those are left behind (in cache_dir, not work_dir) once cropping
+    is done -- work_dir accumulates the same small per-day-per-var crops as
+    without a cache.
     """
     for i, d in enumerate(days):
         dstr = d.strftime("%Y%m%d")
@@ -193,9 +267,14 @@ def build_forcing_gribs(varlist: list, days: list, raw_dir: str, work_dir: str, 
             raise FileNotFoundError(f"missing {tar_path} -- has it been fetched yet?")
 
         t0 = time.time()
-        print(f"-- {dstr}: {len(missing)} variable(s) from one pass over "
-              f"{os.path.basename(tar_path)}", flush=True)
-        members = extract_day_members(tar_path, missing, work_dir)
+        if cache_dir:
+            print(f"-- {dstr}: {len(missing)} variable(s), via shared cache "
+                  f"{os.path.basename(tar_path)}", flush=True)
+            members = populate_daily_cache(tar_path, dstr, cache_dir)
+        else:
+            print(f"-- {dstr}: {len(missing)} variable(s) from one pass over "
+                  f"{os.path.basename(tar_path)}", flush=True)
+            members = extract_day_members(tar_path, missing, work_dir)
         t_gunzip = time.time() - t0
 
         # Only the LAST requested day keeps its 24:00 instant; every other day's
@@ -209,9 +288,12 @@ def build_forcing_gribs(varlist: list, days: list, raw_dir: str, work_dir: str, 
                     fs = fs[:-1]
                 mv.write(day_crop_path(work_dir, var, dstr), fs)
             finally:
-                # Ten uncropped members is ~3.3 GB; drop each as soon as it has
-                # been cropped rather than holding the whole day on disk.
-                os.remove(raw_member)
+                # Without a shared cache, ten uncropped members is ~3.3 GB --
+                # drop each as soon as it has been cropped rather than holding
+                # the whole day on disk. WITH a shared cache, raw_member lives
+                # in cache_dir and other lakes still need it -- never delete it.
+                if not cache_dir:
+                    os.remove(raw_member)
         print(f"   {t_gunzip:.0f}s decompress + {time.time() - t0 - t_gunzip:.0f}s crop",
               flush=True)
 
@@ -238,6 +320,12 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="output NetCDF path")
     ap.add_argument("--work-dir", default=None, help="default: a temp dir, removed afterward")
     ap.add_argument("--keep-work-dir", action="store_true")
+    ap.add_argument("--cache-dir", default=None,
+                     help="shared decompression cache, reused across lakes; "
+                          "default: '_decompressed_cache' next to --raw-dir")
+    ap.add_argument("--no-cache", action="store_true",
+                     help="disable the shared cache: decompress into --work-dir "
+                          "and delete after cropping, as before it existed")
     args = ap.parse_args()
 
     start, end = parse_ymd(args.start), parse_ymd(args.end)
@@ -248,11 +336,16 @@ def main() -> None:
 
     work_dir = args.work_dir or tempfile.mkdtemp(prefix="extract_point_forcing_")
     os.makedirs(work_dir, exist_ok=True)
+    cache_dir = None
+    if not args.no_cache:
+        cache_dir = args.cache_dir or os.path.join(
+            os.path.dirname(os.path.normpath(args.raw_dir)), "_decompressed_cache")
     print(f"=== extract_point_forcing_ecfs: {len(days)} days, {args.lat},{args.lon} ===")
     print(f"work dir: {work_dir}")
+    print(f"cache dir: {cache_dir}" if cache_dir else "cache: disabled (--no-cache)")
 
     try:
-        combined = build_forcing_gribs(VARLIST, days, args.raw_dir, work_dir, area)
+        combined = build_forcing_gribs(VARLIST, days, args.raw_dir, work_dir, area, cache_dir)
 
         per_var_nc = []
         for var in VARLIST:

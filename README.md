@@ -110,6 +110,8 @@ done
 
 Each call crops the global daily GRIB to the point, drops the one-instant overlap between consecutive days, and writes the same schema `ecland_create_namelist.py` and the model already expect. Resumable (`--work-dir`/`WORK_DIR` keeps per-day intermediates; a day already cropped is reused rather than re-fetched/re-cropped). Needs the create_forcing extraction module set (`ecmwf-toolbox/new python3/new netcdf4/new`, plus `cdo`), not the model-run set — see [Known issues](#known-issues).
 
+**Every lake shares one decompression cache.** Decompressing a day's 2.1 GB tarball is the one cost that is genuinely redundant across lakes — cropping to a point is not, since it depends on lat/lon. So decompressed members are written to `--cache-dir`/`CACHE_DIR` (default: a `_decompressed_cache/` dir next to `--raw-dir`, shared automatically unless overridden) keyed by day only, and reused by every lake that asks for that day afterwards — a per-day lock file serialises population across concurrently-running lake jobs racing for the same not-yet-cached day, without serialising the (lat/lon-specific) cropping that follows. Benchmarked 2026-09-05 on 5 days: the second lake to use an already-populated day pays 0 s decompression against the first lake's ~35 s/day, for identical output (verified bit-for-bit both ways: a cached run reproduces the pipeline's already-validated no-cache output, and a lake served entirely from another lake's cache reproduces an independent no-cache run for that same lake). Net effect: ~29% less total time across 2 lakes sharing a cache, ~49% across 7, approaching ~57% as more lakes share it (decompression becomes a vanishing share of the per-lake cost). Pass `--no-cache`/`NO_CACHE=true` to fall back to the old per-run behaviour. The cache is not size- or age-bounded — `rm -rf` it by hand once a batch of lakes is done and the space is wanted back (an all-variable, all-2192-day cache would run to several TB).
+
 Then merge the per-year files into one, in chronological order:
 
 ```bash
@@ -208,6 +210,7 @@ cci-lakes-ecland/
 ├── clim/CCI_LAKES/              # staged physiography/init (NetCDF) -- not in git
 ├── forcing/
 │   ├── raw/                     # daily global GRIB tarballs from ECFS -- not in git
+│   ├── _decompressed_cache/     # shared per-day decompression cache, across all lakes -- not in git
 │   ├── logs/                    # get_forcing_ecfs.sbatch stdout/stderr -- not in git
 │   └── CCI_LAKES/               # ecLand-ready, point-extracted forcing (NetCDF) -- not in git
 ├── obs/                         # ESA-CCI-Lakes observational product -- not sourced yet, not in git
@@ -216,7 +219,7 @@ cci-lakes-ecland/
 └── benchmark/dashboards/        # metrics + dashboard per run -- checked in, once real
 ```
 
-Note: `forcing/raw/` and `forcing/logs/` above live under `$SCRATCH/cci-lakes-ecland/forcing/` (~4.5 TB for the full Ladoga pull), not under this repository's own tree — the layout is shown here because it's still keyed to this repo's convention for where forcing lives, just relocated for the disk space.
+Note: `forcing/raw/`, `forcing/_decompressed_cache/` and `forcing/logs/` above live under `$SCRATCH/cci-lakes-ecland/forcing/` (~4.5 TB for the full Ladoga pull, plus whatever the decompression cache has grown to), not under this repository's own tree — the layout is shown here because it's still keyed to this repo's convention for where forcing lives, just relocated for the disk space.
 
 ## Open work
 
