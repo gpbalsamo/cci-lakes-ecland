@@ -2,7 +2,7 @@
 
 Scripts and configuration to run [ecLand](https://www.ecmwf.int/en/research/modelling-systems/land-surface) (specifically its [FLake](https://www.flake.igb-berlin.de/) lake scheme) over lakes from the [ESA Climate Change Initiative Lakes](https://climate.esa.int/en/projects/lakes/) (CCI Lakes) project, and to benchmark the result against CCI-Lakes observations.
 
-Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. Full 2017-2022 forcing is downloaded, a full-year spin-up run has converged, and six candidate lakes are lined up to try next (`sites/candidate_lakes.csv`). See [Current status](#current-status).
+Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. The full 2017-2022 benchmark period has been simulated end-to-end, and six candidate lakes are lined up to try next (`sites/candidate_lakes.csv`). See [Current status](#current-status).
 
 ## Relationship to sibling repos
 
@@ -23,8 +23,8 @@ Only Ladoga (`Ld-001`) is registered so far — see `sites/lakes.csv`. Benchmark
 
 - **Physiography** (`clim/CCI_LAKES/surfclim_Ld-001_2017-2022.nc`, `surfinit_...`): done. Staged from ecland-portal job `20260904T120600_Ld-001` (a physiography-only rerun) and relabelled from its `2017-2026` placeholder end-date to `2017-2022` with `stage_portal_job.sh --years` — surfclim/surfinit don't depend on end_date at all, so no re-extraction was needed.
 - **Forcing**: done. The full 2017-2022 raw daily GRIB (2192 days, 4.2 TB) is in `$SCRATCH/cci-lakes-ecland/forcing/raw/`.
-- **Point extraction** of the raw daily GRIB into ecLand-ready forcing: written (`scripts/extract_point_forcing_ecfs.py`, `.sbatch` wrapper) and **validated end-to-end** — see below. The full 2017 year is extracted; 2018-2022 (one SLURM job per year, run in parallel — safer than one long job given a ~48h wall-clock limit and that the final NetCDF is only written once every day for every variable is done) are in progress.
-- **Model run**: validated on a 10-day smoke test and a **full-year spin-up/convergence check** — see [End-to-end smoke test](#end-to-end-smoke-test-validated) and, critically, [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
+- **Point extraction and merge**: done. `scripts/extract_point_forcing_ecfs.py` run once per year (2018-2022 in parallel — safer than one ~48h job given the final NetCDF is only written once every day for every variable is done), then `scripts/merge_yearly_forcing.py` joined the six years into `forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2022.nc` (52585 uniformly-spaced hourly timesteps, no gaps, no NaNs).
+- **Model run**: the full 2017-2022 period has been simulated end-to-end (see [Full benchmark-period run](#full-benchmark-period-run-validated)), on top of the earlier 10-day smoke test and full-year spin-up check — see [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
 
 ### End-to-end smoke test (validated)
 
@@ -52,6 +52,10 @@ Once a full year of forcing exists, `ecland_run_model.sh -l N` repeats it N time
 
 Run for Ladoga, full 2017, 8 loops: end-of-year state stabilises within 2-3 loops (loop 1→2 changes by up to 0.35 K / 0.35 m; by loop 5→8 the largest change is under 0.0005 K) — Ladoga's ~66 m depth spins up fast in FLake's bulk mixed-layer scheme. Worth re-checking per lake once the candidates in `sites/candidate_lakes.csv` are run: a shallower lake (e.g. Chilwa, 2 m mean depth) should converge even faster; whether depth vs. convergence speed holds as a general pattern across the set is an open question.
 
+### Full benchmark-period run (validated)
+
+With all six years merged (see step 3 below), a single `ecland_run_model.sh -l 1` pass over 2017-2022 (52584 hourly steps) runs in ~2 minutes on `ecland-master-dp`. No NaNs, no drift: `AvgSurfT` stays in [253, 295] K across the whole period, ~12100 of the 52585 hours (~23%) carry ice (`HLICE > 0`), and end-of-year state varies year to year (274-277 K) the way real inter-annual variability should, not runaway divergence. This run used a cold start (no spin-up loop) — for an actual scored benchmark, prepend a spin-up loop over 2017 first (see above), since the first ~1-2 years of a cold-start run are not yet at the lake's equilibrium state.
+
 ## Quick start
 
 ### 1. Fetch forcing from ECFS
@@ -74,15 +78,34 @@ Copies whatever the job has produced — `clim/CCI_LAKES/`, `forcing/CCI_LAKES/`
 
 ### 3. Turn the raw GRIB into ecLand-ready forcing
 
+For more than a year or so, run one extraction **per calendar year** rather than one call for the whole range: each variable-day takes roughly a minute, and the final NetCDF is only written after every day for every variable is done — a single job for a multi-year range risks losing the entire result to a wall-clock timeout after finishing almost everything. `scripts/extract_point_forcing_ecfs.sbatch` makes this a queued job; submit one per year (they can run in parallel):
+
 ```bash
-python3 scripts/extract_point_forcing_ecfs.py \
-  --raw-dir $SCRATCH/cci-lakes-ecland/forcing/raw \
-  --start 20170101 --end 20230101 \
-  --lat 60.765 --lon 31.648 \
+for YEAR in 2017 2018 2019 2020 2021 2022; do
+  sbatch --export=ALL,RAW_DIR=$SCRATCH/cci-lakes-ecland/forcing/raw,\
+START_DATE=${YEAR}0101,END_DATE=${YEAR}1231,LAT=60.765,LON=31.648,\
+OUT=$PWD/forcing/CCI_LAKES/met_ecfsHT_Ld-001_${YEAR}-${YEAR}.nc,\
+WORK_DIR=$SCRATCH/cci-lakes-ecland/forcing/_work_Ld-001_${YEAR}-${YEAR} \
+    scripts/extract_point_forcing_ecfs.sbatch
+done
+```
+
+Each call crops the global daily GRIB to the point, drops the one-instant overlap between consecutive days, and writes the same schema `ecland_create_namelist.py` and the model already expect. Resumable (`--work-dir`/`WORK_DIR` keeps per-day intermediates; a day already cropped is reused rather than re-fetched/re-cropped). Needs the create_forcing extraction module set (`ecmwf-toolbox/new python3/new netcdf4/new`, plus `cdo`), not the model-run set — see [Known issues](#known-issues).
+
+Then merge the per-year files into one, in chronological order:
+
+```bash
+python3 scripts/merge_yearly_forcing.py \
+  forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2017.nc \
+  forcing/CCI_LAKES/met_ecfsHT_Ld-001_2018-2018.nc \
+  forcing/CCI_LAKES/met_ecfsHT_Ld-001_2019-2019.nc \
+  forcing/CCI_LAKES/met_ecfsHT_Ld-001_2020-2020.nc \
+  forcing/CCI_LAKES/met_ecfsHT_Ld-001_2021-2021.nc \
+  forcing/CCI_LAKES/met_ecfsHT_Ld-001_2022-2022.nc \
   --out forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2022.nc
 ```
 
-Crops the global daily GRIB to the point, drops the one-instant overlap between consecutive days, and writes the same schema `ecland_create_namelist.py` and the model already expect. Resumable (`--work-dir` keeps per-day intermediates; a day already cropped is reused rather than re-fetched/re-cropped) — useful since this runs for as long as `forcing/raw/` takes to fill in behind it. Needs the create_forcing extraction module set (`ecmwf-toolbox/new python3/new netcdf4/new`, plus `cdo`), not the model-run set — see [Known issues](#known-issues).
+Each per-year file's last timestep duplicates the next year's first (both are the Jan 1 00:00 boundary instant a year's extraction keeps so the model has what it needs to drive December's final hour) — the merge script checks for and drops that duplicate, and converts each file's own per-year time origin onto one continuous axis, refusing to write anything if the result isn't uniformly spaced.
 
 ### 4. Generate the namelist and run
 
@@ -138,8 +161,9 @@ cci-lakes-ecland/
 ├── scripts/
 │   ├── get_forcing_ecfs.sh      # fetch daily raw 'oper' GRIB tarballs from ECFS
 │   ├── get_forcing_ecfs.sbatch  # \_ batch wrapper, for a multi-day pull
-│   ├── extract_point_forcing_ecfs.py    # crop raw GRIB to one point -> ecLand-ready forcing NetCDF
+│   ├── extract_point_forcing_ecfs.py    # crop raw GRIB to one point -> ecLand-ready forcing NetCDF (run per year)
 │   ├── extract_point_forcing_ecfs.sbatch # \_ batch wrapper, for a multi-day extraction
+│   ├── merge_yearly_forcing.py  # join per-year forcing files into one, dropping the year-boundary duplicate
 │   ├── stage_portal_job.sh      # import an ecland-portal job into this repo's layout
 │   ├── ecland_run_experiment.sh # run one or more site experiments (vendored from plumber2-ecland)
 │   ├── ecland_run_model.sh      # \_ vendored from plumber2-ecland, unmodified engine logic
