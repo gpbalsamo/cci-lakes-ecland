@@ -2,7 +2,7 @@
 
 Scripts and configuration to run [ecLand](https://www.ecmwf.int/en/research/modelling-systems/land-surface) (specifically its [FLake](https://www.flake.igb-berlin.de/) lake scheme) over lakes from the [ESA Climate Change Initiative Lakes](https://climate.esa.int/en/projects/lakes/) (CCI Lakes) project, and to benchmark the result against CCI-Lakes observations.
 
-Starting point: one lake, **Lake Ladoga** (site `Ld-001`, 60.765N 31.648E), forced from ECMWF operational analysis. The full 2017-2022 benchmark period has been simulated end-to-end and properly spun up; six candidate lakes (`sites/candidate_lakes.csv`) are now moving through the same pipeline. See [Current status](#current-status).
+Seven lakes now have a complete, spun-up 2017-2022 simulation: **Lake Ladoga** (`Ld-001`, the starting point) plus six more from `sites/candidate_lakes.csv` — Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana and Victoria. All forced from ECMWF operational analysis. See [Current status](#current-status) and, importantly, [Spin-up doesn't always converge the same way](#spin-up-doesnt-always-converge-the-same-way) before running a new lake.
 
 ## Relationship to sibling repos
 
@@ -21,18 +21,11 @@ Unlike the two flux-tower repos (`plumber2-ecland`'s 170 PLUMBER2 sites, `fluxne
 
 ## Current status
 
-See `sites/lakes.csv` (lakes with a full pipeline run) and `sites/candidate_lakes.csv` (lakes in progress or not yet started). Benchmark period for all lakes: **2017-2022** (6 full calendar years); forcing is fetched through 2023-01-01 00:00 since ecLand needs that instant as the boundary driving the last timestep of 2022 (see `../ecland-portal`'s README, "The simulated period, and NSTOP").
+`sites/lakes.csv` has one row per lake with a complete pipeline run — as of now, all seven attempted so far (Ladoga plus the six from `sites/candidate_lakes.csv`, which is currently empty pending the next batch). Benchmark period for all lakes: **2017-2022** (6 full calendar years); forcing is fetched through 2023-01-01 00:00 since ecLand needs that instant as the boundary driving the last timestep of 2022 (see `../ecland-portal`'s README, "The simulated period, and NSTOP").
 
-### Ladoga (`Ld-001`) — complete
+Every lake went through the same four stages — physiography via ecland-portal, per-year forcing extraction against the shared raw ECFS archive (no new download needed per lake), merge, then spin-up + scored run — now wrapped in one script, `scripts/run_lake_pipeline.sh SITE LAT LON [NLOOP]`, once physiography and forcing are staged. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
 
-- **Physiography** (`clim/CCI_LAKES/surfclim_Ld-001_2017-2022.nc`, `surfinit_...`): done. Staged from ecland-portal job `20260904T120600_Ld-001` (a physiography-only rerun) and relabelled from its `2017-2026` placeholder end-date to `2017-2022` with `stage_portal_job.sh --years` — surfclim/surfinit don't depend on end_date at all, so no re-extraction was needed.
-- **Forcing**: done. The full 2017-2022 raw daily GRIB (2192 days, 4.2 TB) is in `$SCRATCH/cci-lakes-ecland/forcing/raw/` — this is a *global* archive, reused as-is for every other lake too, no new ECFS download needed per lake.
-- **Point extraction and merge**: done. `scripts/extract_point_forcing_ecfs.py` run once per year (2018-2022 in parallel — safer than one ~48h job given the final NetCDF is only written once every day for every variable is done), then `scripts/merge_yearly_forcing.py` joined the six years into `forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2022.nc` (52585 uniformly-spaced hourly timesteps, no gaps, no NaNs).
-- **Model run**: the full 2017-2022 period has been simulated end-to-end and **properly spun up** (see [Full benchmark-period run](#full-benchmark-period-run-validated-spun-up)), on top of the earlier 10-day smoke test and full-year spin-up check — see [Known issues](#known-issues) before running further. **Post-processing and benchmarking**: not started — see [Open work](#open-work).
-
-### Candidate lakes — in progress
-
-Six lakes from `sites/candidate_lakes.csv` (Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana, Victoria) are moving through the same pipeline: an ecland-portal physiography-only job per lake (mirroring Ladoga's `20260904T120600_Ld-001`), plus 6 years × 6 lakes = 36 parallel per-year point-extraction jobs against the already-downloaded raw archive (no new ECFS transfer needed). Once both finish per lake: merge, generate the namelist, spin-up check, then a properly spun-up full-period run — the same four steps Ladoga already went through.
+**Read [Spin-up doesn't always converge the same way](#spin-up-doesnt-always-converge-the-same-way) before running a new lake** — the default `NLOOP=8` was silently wrong for one of the six candidates.
 
 ### End-to-end smoke test (validated)
 
@@ -58,7 +51,17 @@ Result: `AvgSurfT` cools from 274.71 K to 271.9 K over the 10 days (a January co
 
 Once a full year of forcing exists, `ecland_run_model.sh -l N` repeats it N times, each loop restarting from the previous loop's end state (`ecland_run_model.sh`'s existing spin-up mechanism — no new script needed for the run itself). `scripts/check_spinup_convergence.py OUTPUT_DIR N` reads the end-of-year FLake state (`AvgSurfT`, `TLMNW`, `TLWML`, `TLBOT`, `HLML`, `HLICE`) from every loop's `o_gg_S<n>.nc` and reports how far apart consecutive loops are — the standard spin-up diagnostic.
 
-Run for Ladoga, full 2017, 8 loops: end-of-year state stabilises within 2-3 loops (loop 1→2 changes by up to 0.35 K / 0.35 m; by loop 5→8 the largest change is under 0.0005 K) — Ladoga's ~66 m depth spins up fast in FLake's bulk mixed-layer scheme. Worth re-checking per lake once the candidates in `sites/candidate_lakes.csv` are run: a shallower lake (e.g. Chilwa, 2 m mean depth) should converge even faster; whether depth vs. convergence speed holds as a general pattern across the set is an open question.
+Run for Ladoga, full 2017, 8 loops: end-of-year state stabilises within 2-3 loops (loop 1→2 changes by up to 0.35 K / 0.35 m; by loop 5→8 the largest change is under 0.0005 K) — Ladoga's ~66 m depth spins up fast in FLake's bulk mixed-layer scheme.
+
+### Spin-up doesn't always converge the same way
+
+Running all six candidates confirmed depth is what drives this, but not in a single simple direction — three distinct regimes showed up, and the shape of the delta trend (not just its size at whatever loop count you happened to try) is what tells them apart:
+
+- **Shallow, well-mixed (LDEPTH 1-3 m: Baringo, Chilwa, Kyoga, Mweru Wantipa)** — converges **instantly**: loop 1→2 delta is `0.00000` (or one small correction then `0.00000`, Kyoga). No separate deep-water reservoir to equilibrate, so there's nothing to spin up.
+- **Moderately deep (Tana, LDEPTH 10 m)** — the default `NLOOP=8` was **not enough** and looked actively wrong if you only glanced at the last row: `TLBOT`'s per-loop delta *grew* every loop (0.51 K at loop 2 up to 0.87 K at loop 8 — still accelerating). Rerunning with `NLOOP=40` showed the real shape: `TLBOT` decays smoothly through loop 15, then locks to an exact fixed point from loop 16 on (`delta=0.00000` for loops 16-40 to 5 decimal places). A real, if late and unusually-shaped, convergence — not a runaway. **Lesson: don't trust a small delta at whatever loop count you stopped at; check whether the trend is actually decaying, and rerun with more loops if it's still growing.**
+- **Very deep (Victoria, LDEPTH 70 m)** — checked out to 65 loops and **never converged**: `TLBOT` increases by a near-constant ~0.065-0.066 K *every single loop*, with no decay at all (contrast Tana's clearly-decaying-then-locking shape) — a sustained linear drift, not an exponential approach to some fixed point. Plausibly reflects a genuinely very long deep-water equilibration timescale for a lake this large, and/or that repeating one identical year is the wrong spin-up technique for it (a real lake's deep water reaches quasi-equilibrium through many *different* years' stratification and mixing events, not one cycle replayed indefinitely). The saving grace: the near-surface state that actually matters for LSWT benchmarking (`AvgSurfT`, `TLWML`) drifts roughly **17x slower** than `TLBOT` (~0.004-0.005 K/loop) — still not fully flat, but small in absolute terms. Victoria's scored run was seeded from a 40-loop state as a pragmatic, documented-caveat choice, not a fully-converged one; see `sites/lakes.csv` for the numbers. Revisit with a real multi-year forcing sequence for spin-up (rather than more loops of one year) if deep-water fidelity turns out to matter for this lake's specific use.
+
+**Practical takeaway for the next lake**: always run `check_spinup_convergence.py` and look at the *shape* of the delta column, not just its last value. `run_lake_pipeline.sh`'s default `NLOOP=8` is a starting point tuned to Ladoga, not a safe default for every lake.
 
 ### Full benchmark-period run (validated, spun up)
 
@@ -161,6 +164,15 @@ scripts/ecland_run_model.sh -s Ld-001_2017-2022 -b <ecland-master-dp> \
 
 **The executable choice matters more than anything else here — see [Known issues](#known-issues) before picking one.** If a portal job's own run was staged instead (`output/<STA>__portal_<job_id>/`, see step 2), that is already a valid (though not spun-up) simulation.
 
+**Once steps 1-2 (physiography + per-year forcing) are staged for a new lake**, steps 3-4 above are one call — `scripts/run_lake_pipeline.sh` does the merge, both namelists (with the `NSTOP` fix applied automatically), the spin-up run, the convergence check, and the spun-up scored run:
+
+```bash
+scripts/run_lake_pipeline.sh Br-001 0.6334 36.0750       # NLOOP defaults to 8
+scripts/run_lake_pipeline.sh Vi-001 -1.2625 33.2334 40    # override NLOOP for a deep lake
+```
+
+**Read its convergence-check output before trusting the result** — see [Spin-up doesn't always converge the same way](#spin-up-doesnt-always-converge-the-same-way): the default `NLOOP=8` silently under-converged one of the six candidates, and another still hadn't converged at `NLOOP=40`.
+
 ### 5. Post-process and benchmark
 
 ```bash
@@ -205,6 +217,7 @@ cci-lakes-ecland/
 │   ├── ecland_runtime.sh        # /
 │   ├── ecland_create_namelist.py# /
 │   ├── check_spinup_convergence.py # read end-of-loop FLake state from an -l N run, report loop-to-loop change
+│   ├── run_lake_pipeline.sh     # merge -> namelists -> spin-up -> scored run, one call per lake
 │   ├── postproc_lake.py         # STUB: raw ecLand output -> lake variable schema
 │   └── benchmark_lake.py        # STUB: score against ESA-CCI-Lakes observations
 ├── clim/CCI_LAKES/              # staged physiography/init (NetCDF) -- not in git
@@ -223,9 +236,10 @@ Note: `forcing/raw/`, `forcing/_decompressed_cache/` and `forcing/logs/` above l
 
 ## Open work
 
-- **Finish the candidate lakes.** Physiography is staged for all six (Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana, Victoria — all confirmed 100% lake fraction, depths in the right ballpark against `sites/candidate_lakes.csv`'s reference values). Per-year forcing extraction (36 jobs, 6 lakes × 6 years, against the already-downloaded raw archive) is running. Once done per lake: merge (step 3), spin-up check (step 4a), spun-up full-period run (step 4b) — same four steps Ladoga went through. Move each from `candidate_lakes.csv` into `sites/lakes.csv` as it completes.
+- **Resolve Victoria's spin-up properly** (see [Spin-up doesn't always converge the same way](#spin-up-doesnt-always-converge-the-same-way)) — likely needs a real multi-year spin-up sequence rather than more loops of one repeated year, if the deep-water (`TLBOT`) state turns out to matter for this lake.
+- **Add more lakes.** `sites/candidate_lakes.csv` is currently empty (all six of its previous entries completed and moved to `sites/lakes.csv`) — add the next batch there with the same physical-parameter columns, then run each through ecland-portal physiography + `extract_point_forcing_ecfs.sbatch` (one job per year) + `scripts/run_lake_pipeline.sh`.
 - **Source the ESA-CCI-Lakes observational product.** Most likely the lake surface water temperature (LSWT) product; possibly also ice cover/duration. Nothing CCI-Lakes-shaped was found under `$PERM` while setting this repo up.
-- **Implement `postproc_lake.py`** to read the FLake fields from `o_gg.nc` (see [Known issues](#known-issues) for the field list — confirmed present, physically evolving and stable across a full 6-year run) into whatever schema `benchmark_lake.py` ends up scoring against.
+- **Implement `postproc_lake.py`** to read the FLake fields from `o_gg.nc` (see [Known issues](#known-issues) for the field list — confirmed present, physically evolving and stable across a full 6-year run, for seven lakes with widely varying depth and climate now) into whatever schema `benchmark_lake.py` ends up scoring against.
 - **Implement `benchmark_lake.py`** once both of the above exist — likely following `plumber2-ecland/scripts/benchmark_plumber2.py`'s shape (per-site scores, self-contained HTML dashboard), scored per lake instead of per flux tower.
 
 ## License
