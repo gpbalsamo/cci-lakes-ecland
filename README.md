@@ -1,6 +1,8 @@
-# cci-lakes-ecland
+# ifs-lakebench
 
-Scripts and configuration to run [ecLand](https://www.ecmwf.int/en/research/modelling-systems/land-surface) (specifically its [FLake](https://www.flake.igb-berlin.de/) lake scheme) over lakes from the [ESA Climate Change Initiative Lakes](https://climate.esa.int/en/projects/lakes/) (CCI Lakes) project, and to benchmark the result against CCI-Lakes observations.
+Scripts and configuration to run [ecLand](https://www.ecmwf.int/en/research/modelling-systems/land-surface) (specifically its [FLake](https://www.flake.igb-berlin.de/) lake scheme) offline, single-point, over an arbitrary set of lakes worldwide, and to benchmark the result against observations. It builds a per-lake pipeline — physiography, forcing, spin-up, scored run, post-processing — the same way `plumber2-ecland` and `fluxnet-shuttle-ecland` do for flux-tower sites, but for lake points instead.
+
+The motivating use case so far, and the one driving the choice of observational product, is the [ESA Climate Change Initiative Lakes](https://climate.esa.int/en/projects/lakes/) (CCI Lakes) project — but nothing about the pipeline itself is CCI-Lakes-specific: any lake with a lat/lon and a physiography source can go through it, scored against whichever observational product fits.
 
 Seven lakes now have a complete, spun-up 2017-2022 simulation: **Lake Ladoga** (`Ld-001`, the starting point) plus six more from `sites/candidate_lakes.csv` — Baringo, Chilwa, Kyoga, Mweru Wantipa, Tana and Victoria. All forced from ECMWF operational analysis. See [Current status](#current-status) and, importantly, [Spin-up doesn't always converge the same way](#spin-up-doesnt-always-converge-the-same-way) before running a new lake.
 
@@ -33,7 +35,7 @@ Confirms the full pipeline works: ECFS fetch → point extraction → namelist �
 
 ```bash
 python3 scripts/extract_point_forcing_ecfs.py \
-  --raw-dir $SCRATCH/cci-lakes-ecland/forcing/raw \
+  --raw-dir $SCRATCH/ifs-lakebench/forcing/raw \
   --start 20170101 --end 20170110 --lat 60.765 --lon 31.648 \
   --out forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2017.nc
 # clim/CCI_LAKES/{surfclim,surfinit}_Ld-001_2017-2017.nc copied from the
@@ -87,7 +89,7 @@ scripts/get_forcing_ecfs.sh 20170101 20230101
 sbatch --export=ALL,START_DATE=20170101,END_DATE=20230101 scripts/get_forcing_ecfs.sbatch
 ```
 
-Defaults to `$SCRATCH/cci-lakes-ecland/forcing/raw/`, concurrency 8 (tested: faster than serial, but 16 was *slower* than 8 — ECFS/tape access seems to throttle somewhere around there). Safe to re-run or resume: `ecp`'s default `-n` behaviour skips a destination file that already exists.
+Defaults to `$SCRATCH/ifs-lakebench/forcing/raw/`, concurrency 8 (tested: faster than serial, but 16 was *slower* than 8 — ECFS/tape access seems to throttle somewhere around there). Safe to re-run or resume: `ecp`'s default `-n` behaviour skips a destination file that already exists.
 
 ### 2. Stage a lake's ecland-portal (physiography) job
 
@@ -103,10 +105,10 @@ For more than a year or so, run one extraction **per calendar year** rather than
 
 ```bash
 for YEAR in 2017 2018 2019 2020 2021 2022; do
-  sbatch --export=ALL,RAW_DIR=$SCRATCH/cci-lakes-ecland/forcing/raw,\
+  sbatch --export=ALL,RAW_DIR=$SCRATCH/ifs-lakebench/forcing/raw,\
 START_DATE=${YEAR}0101,END_DATE=${YEAR}1231,LAT=60.765,LON=31.648,\
 OUT=$PWD/forcing/CCI_LAKES/met_ecfsHT_Ld-001_${YEAR}-${YEAR}.nc,\
-WORK_DIR=$SCRATCH/cci-lakes-ecland/forcing/_work_Ld-001_${YEAR}-${YEAR} \
+WORK_DIR=$SCRATCH/ifs-lakebench/forcing/_work_Ld-001_${YEAR}-${YEAR} \
     scripts/extract_point_forcing_ecfs.sbatch
 done
 ```
@@ -199,7 +201,7 @@ Name new variants `namelist_ecland_lake_<variant>`, matching the plumber2-ecland
 ## Repository layout
 
 ```
-cci-lakes-ecland/
+ifs-lakebench/
 ├── sites/
 │   ├── lakes.csv                # registry: one row per lake actually staged/run (site_id, lat/lon, dates, portal job, status)
 │   ├── candidate_lakes.csv      # lakes to try next -- physical parameters only, not yet extracted
@@ -232,7 +234,7 @@ cci-lakes-ecland/
 └── benchmark/dashboards/        # metrics + dashboard per run -- checked in, once real
 ```
 
-Note: `forcing/raw/`, `forcing/_decompressed_cache/` and `forcing/logs/` above live under `$SCRATCH/cci-lakes-ecland/forcing/` (~4.5 TB for the full Ladoga pull, plus whatever the decompression cache has grown to), not under this repository's own tree — the layout is shown here because it's still keyed to this repo's convention for where forcing lives, just relocated for the disk space.
+Note: `forcing/raw/`, `forcing/_decompressed_cache/` and `forcing/logs/` above live under `$SCRATCH/ifs-lakebench/forcing/` (~4.5 TB for the full Ladoga pull, plus whatever the decompression cache has grown to), not under this repository's own tree — the layout is shown here because it's still keyed to this repo's convention for where forcing lives, just relocated for the disk space.
 
 ## Open work
 

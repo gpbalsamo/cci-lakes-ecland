@@ -13,7 +13,7 @@
 # job actually needs is wall clock, capped at qos nf's 2-day MaxWall.
 #
 # Submit with the parameters as --export, e.g.:
-#   sbatch --export=START_DATE=20170101,END_DATE=20230101,DEST_DIR=$SCRATCH/cci-lakes-ecland/forcing/raw,CONCURRENCY=8 \
+#   sbatch --export=START_DATE=20170101,END_DATE=20230101,DEST_DIR=$SCRATCH/ifs-lakebench/forcing/raw,CONCURRENCY=8 \
 #     scripts/get_forcing_ecfs.sbatch
 #
 # START_DATE and END_DATE are required; DEST_DIR and CONCURRENCY fall back to
@@ -29,13 +29,13 @@ set -uo pipefail
 # is why the first submission of this job, 32771319, failed in 8 seconds with
 # "get_forcing_ecfs.sh: No such file or directory"). Resolve the repo root
 # from $PERM instead, like the sibling repos' own scripts do.
-REPO_DIR="${REPO_DIR:-${PERM:?PERM not set in the batch environment}/cci-lakes-ecland}"
+REPO_DIR="${REPO_DIR:-${PERM:?PERM not set in the batch environment}/ifs-lakebench}"
 
 : "${START_DATE:?set via --export=START_DATE=YYYYMMDD}"
 : "${END_DATE:?set via --export=END_DATE=YYYYMMDD}"
 : "${SCRATCH:?SCRATCH not set in the batch environment}"
 
-DEST_DIR="${DEST_DIR:-${SCRATCH}/cci-lakes-ecland/forcing/raw}"
+DEST_DIR="${DEST_DIR:-${SCRATCH}/ifs-lakebench/forcing/raw}"
 CONCURRENCY="${CONCURRENCY:-4}"
 
 "${REPO_DIR}/scripts/get_forcing_ecfs.sh" "${START_DATE}" "${END_DATE}" "${DEST_DIR}" "${CONCURRENCY}"

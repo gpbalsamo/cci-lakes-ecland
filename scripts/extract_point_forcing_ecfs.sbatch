@@ -13,10 +13,10 @@
 # than a login-node process tied to an interactive session.
 #
 # Submit with the parameters as --export, e.g. a full year for Ladoga:
-#   sbatch --export=ALL,RAW_DIR=$SCRATCH/cci-lakes-ecland/forcing/raw,\
+#   sbatch --export=ALL,RAW_DIR=$SCRATCH/ifs-lakebench/forcing/raw,\
 #     START_DATE=20170101,END_DATE=20171231,LAT=60.765,LON=31.648,\
-#     OUT=$PERM/cci-lakes-ecland/forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2017.nc,\
-#     WORK_DIR=$SCRATCH/cci-lakes-ecland/forcing/_work_Ld-001_2017-2017 \
+#     OUT=$PERM/ifs-lakebench/forcing/CCI_LAKES/met_ecfsHT_Ld-001_2017-2017.nc,\
+#     WORK_DIR=$SCRATCH/ifs-lakebench/forcing/_work_Ld-001_2017-2017 \
 #     scripts/extract_point_forcing_ecfs.sbatch
 #
 # RAW_DIR, START_DATE, END_DATE, LAT, LON and OUT are required; WORK_DIR
@@ -38,7 +38,7 @@ set -uo pipefail
 # See get_forcing_ecfs.sbatch's own note: SLURM copies the submitted script to
 # /var/spool/slurmd/job<id>/ and runs it from there, so ${BASH_SOURCE[0]}-based
 # path resolution does not find sibling files. Anchor to $PERM instead.
-REPO_DIR="${REPO_DIR:-${PERM:?PERM not set in the batch environment}/cci-lakes-ecland}"
+REPO_DIR="${REPO_DIR:-${PERM:?PERM not set in the batch environment}/ifs-lakebench}"
 
 : "${RAW_DIR:?set via --export=RAW_DIR=...}"
 : "${START_DATE:?set via --export=START_DATE=YYYYMMDD}"

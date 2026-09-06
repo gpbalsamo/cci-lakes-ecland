@@ -20,7 +20,7 @@
 ! FLake's full prognostic set per grid point -- AvgSurfT (skin), TLWML
 ! (mixed-layer temp, the LSWT proxy), TLMNW (mean water temp), TLBOT (bottom
 ! temp), TLICE (ice temp), HLML (mixed-layer depth), HLICE (ice thickness).
-! That's what scripts/postproc_lake.py should read from. See cci-lakes-ecland's
+! That's what scripts/postproc_lake.py should read from. See ifs-lakebench's
 ! README, "Known issues", for which ecland-master binary to run this with --
 ! it matters far more than LWRLKE: a wrong one silently produces a constant,
 ! unphysical lake state instead of erroring.

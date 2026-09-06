@@ -29,7 +29,7 @@
 #   get_forcing_ecfs.sh START_DATE END_DATE [DEST_DIR] [CONCURRENCY]
 #
 #     START_DATE, END_DATE  YYYYMMDD, inclusive
-#     DEST_DIR              default: $SCRATCH/cci-lakes-ecland/forcing/raw
+#     DEST_DIR              default: $SCRATCH/ifs-lakebench/forcing/raw
 #     CONCURRENCY           parallel ecp transfers, default 4 -- ECFS is
 #                           backed by a tape robot; keep this modest rather
 #                           than hammering it.
@@ -50,7 +50,7 @@ fi
 
 START_DATE="$1"
 END_DATE="$2"
-DEST_DIR="${3:-${SCRATCH:?SCRATCH not set}/cci-lakes-ecland/forcing/raw}"
+DEST_DIR="${3:-${SCRATCH:?SCRATCH not set}/ifs-lakebench/forcing/raw}"
 CONCURRENCY="${4:-4}"
 ECFS_DIR="ec:/paga/OSM_FORCING"
 PREFIX="forcing_od_1_oper_1"

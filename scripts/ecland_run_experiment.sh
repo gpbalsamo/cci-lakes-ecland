@@ -9,7 +9,7 @@
 # paths are derived from the location of this script rather than from `pwd`.
 #
 # Example repository layout:
-#   cci-lakes-ecland/
+#   ifs-lakebench/
 #   ├── clim/CCI_LAKES/
 #   ├── forcing/CCI_LAKES/
 #   ├── namelists/
@@ -161,7 +161,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 # Absolute directory containing this script:
-#   /perm/pad/cci-lakes-ecland/scripts
+#   /perm/pad/ifs-lakebench/scripts
 SCRIPTS_DIR=$(
   cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1
   pwd -P
@@ -170,7 +170,7 @@ SCRIPTS_DIR=$(
 SCRIPT_PATH="${SCRIPTS_DIR}/$(basename -- "${BASH_SOURCE[0]}")"
 
 # Repository root:
-#   /perm/pad/cci-lakes-ecland
+#   /perm/pad/ifs-lakebench
 PROJECT_ROOT=$(
   cd -- "${SCRIPTS_DIR}/.." >/dev/null 2>&1
   pwd -P
